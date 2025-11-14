@@ -3,10 +3,10 @@ import requests
 import json
 import os
 import logging
-from dotenv import load_dotenv  # 👈 IMPORTANTE: agrega esta línea
+from dotenv import load_dotenv
 
 # Cargar variables de entorno
-load_dotenv()  # 👈 Y esta línea también
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -20,7 +20,7 @@ if not API_KEY:
 
 BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# 🧩 HTML futurista mejorado con correcciones y mejoras
+# 🧩 HTML futurista mejorado con chat continuo y correcciones
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="es">
@@ -128,16 +128,34 @@ HTML_TEMPLATE = """
             transform: scale(1.07);
         }
 
-        .response {
+        .chat-container {
             margin-top: 20px;
-            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
             background: rgba(0, 255, 255, 0.05);
             border-radius: 10px;
             border: 1px solid #00ffff;
-            white-space: pre-wrap;
+            padding: 15px;
             box-shadow: inset 0 0 10px rgba(0,255,255,0.2);
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            white-space: pre-wrap;
             font-size: 1em;
-            min-height: 60px;
+        }
+
+        .user-message {
+            background: rgba(0, 255, 255, 0.1);
+            text-align: right;
+            color: #00ffff;
+        }
+
+        .assistant-message {
+            background: rgba(255, 0, 255, 0.1);
+            color: #ff00ff;
         }
 
         .loading {
@@ -184,9 +202,9 @@ HTML_TEMPLATE = """
 
     <div class="section">
         <h2>🧠 Chat de Texto</h2>
+        <div class="chat-container" id="textChat"></div>
         <textarea id="textInput" rows="4" placeholder="Escribe tu mensaje aquí..."></textarea>
         <button id="textButton" onclick="sendText()">Enviar</button>
-        <div id="textResponse" class="response"></div>
     </div>
 
     <div class="section">
@@ -194,7 +212,7 @@ HTML_TEMPLATE = """
         <input type="url" id="imageUrl" placeholder="URL de la imagen...">
         <textarea id="imageText" rows="4" placeholder="¿Qué deseas saber sobre la imagen?"></textarea>
         <button id="imageButton" onclick="sendImage()">Enviar con Imagen</button>
-        <div id="imageResponse" class="response"></div>
+        <div id="imageResponse" class="message assistant-message"></div>
     </div>
 
     <footer>✨ Desarrollado por <b>TecSoft AI</b> | Con tecnología futurista ⚙️</footer>
@@ -238,25 +256,62 @@ HTML_TEMPLATE = """
         }
         drawParticles();
 
+        // Historial de chat para texto
+        let chatHistory = [];
+
+        function addMessage(role, content) {
+            chatHistory.push({ role, content });
+            const chatContainer = document.getElementById('textChat');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = role === 'user' ? 'message user-message' : 'message assistant-message';
+            messageDiv.textContent = content;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
         async function sendText() {
             const text = document.getElementById('textInput').value.trim();
-            const output = document.getElementById('textResponse');
             const button = document.getElementById('textButton');
             if (!text) return alert("Escribe algo primero");
             button.disabled = true;
-            output.innerHTML = "<p class='loading'>⏳ Procesando...</p>";
+            document.getElementById('textInput').value = '';
+
+            addMessage('user', text);
+
+            // Agregar mensaje de loading
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message assistant-message loading';
+            loadingDiv.textContent = '⏳ Procesando...';
+            document.getElementById('textChat').appendChild(loadingDiv);
 
             try {
                 const res = await fetch('/api/text', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text })
+                    body: JSON.stringify({ messages: chatHistory })
                 });
-                const data = await res.json();
-                if (res.ok) output.textContent = data.reply;
-                else output.innerHTML = "<p class='error'>❌ " + (data.error || "Error desconocido") + "</p>";
+                let data;
+                if (res.ok) {
+                    data = await res.json();
+                    // Remover loading
+                    document.getElementById('textChat').removeChild(loadingDiv);
+                    addMessage('assistant', data.reply);
+                } else {
+                    // Intentar parsear error, pero si no es JSON, mostrar mensaje genérico
+                    try {
+                        data = await res.json();
+                        document.getElementById('textChat').removeChild(loadingDiv);
+                        addMessage('assistant', '❌ ' + (data.error || 'Error desconocido'));
+                    } catch (e) {
+                        document.getElementById('textChat').removeChild(loadingDiv);
+                        addMessage('assistant', '❌ Error en la respuesta del servidor');
+                    }
+                }
             } catch (e) {
-                output.innerHTML = "<p class='error'>⚠️ " + e.message + "</p>";
+                // Remover loading
+                const chatContainer = document.getElementById('textChat');
+                if (chatContainer.contains(loadingDiv)) chatContainer.removeChild(loadingDiv);
+                addMessage('assistant', '⚠️ ' + e.message);
             } finally {
                 button.disabled = false;
             }
@@ -277,9 +332,18 @@ HTML_TEMPLATE = """
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text, image_url: image })
                 });
-                const data = await res.json();
-                if (res.ok) output.textContent = data.reply;
-                else output.innerHTML = "<p class='error'>❌ " + (data.error || "Error desconocido") + "</p>";
+                let data;
+                if (res.ok) {
+                    data = await res.json();
+                    output.textContent = data.reply;
+                } else {
+                    try {
+                        data = await res.json();
+                        output.innerHTML = "<p class='error'>❌ " + (data.error || "Error desconocido") + "</p>";
+                    } catch (e) {
+                        output.innerHTML = "<p class='error'>❌ Error en la respuesta del servidor</p>";
+                    }
+                }
             } catch (e) {
                 output.innerHTML = "<p class='error'>⚠️ " + e.message + "</p>";
             } finally {
@@ -291,24 +355,32 @@ HTML_TEMPLATE = """
 </html>
 """
 
-
 # 🧩 Función auxiliar para comunicarse con OpenRouter con mejoras
 def query_model(model, messages):
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     payload = {"model": model, "messages": messages}
 
     try:
-        response = requests.post(BASE_URL, headers=headers, json=payload, timeout=30)  # Agregar timeout
+        response = requests.post(BASE_URL, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         result = response.json()
         content = result.get("choices", [{}])[0].get("message", {}).get("content", "Sin respuesta")
-        logging.info(f"Respuesta del modelo {model}: {content[:100]}...")  # Log parcial para debugging
+        logging.info(f"Respuesta del modelo {model}: {content[:100]}...")
         return content
     except requests.exceptions.Timeout:
         return "Error: Tiempo de espera agotado en la API."
     except requests.exceptions.RequestException as e:
         logging.error(f"Error en la API: {str(e)}")
         return f"Error en la API: {str(e)}"
+
+# Manejadores de error para devolver JSON siempre
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Ruta no encontrada'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Error interno del servidor'}), 500
 
 @app.route('/')
 def home():
@@ -320,13 +392,15 @@ def api_text():
         data = request.get_json()
         if not data:
             return jsonify({'error': 'Datos JSON requeridos'}), 400
-        text = data.get('text', '').strip()
-        if not text:
-            return jsonify({'error': 'Texto requerido'}), 400
-        if len(text) > 10000:  # Limitar longitud para evitar abuso
-            return jsonify({'error': 'Texto demasiado largo (máx. 10000 caracteres)'}), 400
+        messages = data.get('messages', [])
+        if not messages or not isinstance(messages, list):
+            return jsonify({'error': 'Lista de mensajes requerida'}), 400
+        # Validar longitud total
+        total_length = sum(len(str(msg.get('content', ''))) for msg in messages)
+        if total_length > 50000:  # Limitar para evitar abuso
+            return jsonify({'error': 'Historial demasiado largo (máx. 50000 caracteres)'}), 400
 
-        reply = query_model("z-ai/glm-4.5-air:free", [{"role": "user", "content": text}])
+        reply = query_model("z-ai/glm-4.5-air:free", messages)
         return jsonify({'reply': reply})
     except Exception as e:
         logging.error(f"Error en /api/text: {str(e)}")
@@ -342,7 +416,7 @@ def api_image():
         image_url = data.get('image_url', '').strip()
         if not text or not image_url:
             return jsonify({'error': 'Texto e imagen requeridos'}), 400
-        if len(text) > 5000 or len(image_url) > 2000:  # Limitar longitud
+        if len(text) > 5000 or len(image_url) > 2000:
             return jsonify({'error': 'Texto o URL demasiado largos'}), 400
 
         # Validar URL básica
@@ -363,4 +437,4 @@ def api_image():
         return jsonify({'error': 'Error interno del servidor'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=False, port=5000)  # Cambiado a debug=False para evitar páginas HTML de error
