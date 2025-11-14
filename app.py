@@ -400,7 +400,7 @@ def api_text():
         if total_length > 50000:  # Limitar para evitar abuso
             return jsonify({'error': 'Historial demasiado largo (máx. 50000 caracteres)'}), 400
 
-        reply = query_model("z-ai/glm-4.5-air:free", messages)
+        reply = query_model("deepseek/deepseek-r1-0528:free", messages)
         return jsonify({'reply': reply})
     except Exception as e:
         logging.error(f"Error en /api/text: {str(e)}")
