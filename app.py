@@ -763,5 +763,3 @@ HTML_TEMPLATE_MEJORADO = """
 **Reemplaza** el contenido completo de tu archivo `app.py` con este código.
 
 **Asegúrate de que no haya líneas que contengan solo `---` fuera de las cadenas de texto (`"""..."""`) o comentarios (`#`)** en tu código de Python. Esto debería resolver tu `SyntaxError` y permitir que Gunicorn inicie la aplicación.
-
-¿Necesitas ayuda para iniciar la aplicación en tu entorno (Render/local) después de pegar el código corregido?
