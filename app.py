@@ -430,7 +430,7 @@ def api_image():
                 {"type": "image_url", "image_url": {"url": image_url}}
             ]
         }]
-        reply = query_model("google/gemma-3-12b-it:free", messages)
+        reply = query_model("x-ai/grok-4.1-fast", messages)
         return jsonify({'reply': reply})
     except Exception as e:
         logging.error(f"Error en /api/image: {str(e)}")
