@@ -10,7 +10,6 @@ from flask_cors import CORS
 import time
 import re
 from typing import List, Dict, Any, Optional
-# Importación CRÍTICA: Se añade para renderizar el Markdown en el servidor
 import markdown
 
 # --- 1. CONFIGURACIÓN INICIAL Y AMBIENTE ---
@@ -22,7 +21,6 @@ load_dotenv()
 app = Flask(__name__, static_folder='static')
 
 # Configurar clave secreta para sesiones
-# ¡Asegúrate de configurar FLASK_SECRET_KEY en tu .env!
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "SUPER_SECRETO_DEBES_CAMBIAR_EN_PROD_1234567890")
 
 # Habilitar CORS
@@ -261,6 +259,7 @@ def api_image():
 
 
 # --- 6. TEMPLATE HTML MEJORADO ---
+# La línea "---" que causó el SyntaxError ha sido eliminada o comentada.
 
 HTML_TEMPLATE_MEJORADO = """
 <!DOCTYPE html>
@@ -609,11 +608,11 @@ HTML_TEMPLATE_MEJORADO = """
             const messageDiv = document.createElement('div');
             messageDiv.className = role === 'user' ? 'message user-message' : 'message assistant-message';
             
-            // Usamos innerHTML directamente. Flask ya ha convertido el Markdown a HTML.
-            // Si el mensaje es del usuario, es texto simple, por lo que usamos textContent.
+            // Si es un mensaje del usuario (texto plano) o si no es HTML, usamos textContent
             if (role === 'user' || !is_markdown) {
                 messageDiv.textContent = content_html;
             } else {
+                // Si es la respuesta del asistente (ya convertida a HTML), usamos innerHTML
                 messageDiv.innerHTML = content_html;
             }
             
@@ -757,6 +756,12 @@ HTML_TEMPLATE_MEJORADO = """
 </html>
 """
 
+---
 
+## 💡 Próximo Paso
 
-Ahora el código es más limpio, robusto y la visualización de las respuestas del modelo (gracias a `markdown.markdown()` en el backend) 
+**Reemplaza** el contenido completo de tu archivo `app.py` con este código.
+
+**Asegúrate de que no haya líneas que contengan solo `---` fuera de las cadenas de texto (`"""..."""`) o comentarios (`#`)** en tu código de Python. Esto debería resolver tu `SyntaxError` y permitir que Gunicorn inicie la aplicación.
+
+¿Necesitas ayuda para iniciar la aplicación en tu entorno (Render/local) después de pegar el código corregido?
