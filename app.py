@@ -1,428 +1,405 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, Response, Blueprint, g, session
 import requests
 import json
 import os
 import logging
 from dotenv import load_dotenv
+from functools import wraps
+import time
+from collections import defaultdict
+import hashlib
+import re
+import sqlite3
+from contextlib import contextmanager
+import threading
+import smtplib
+from email.mime.text import MIMEText
+import secrets
+import cachetools
+from cachetools import TTLCache
 
-# Cargar variables de entorno
+# Cargar variables de entorno desde un archivo .env si existe
 load_dotenv()
 
+# Inicializar la aplicación Flask con configuración
+class Config:
+    SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_hex(16))
+    DATABASE = os.getenv("DATABASE", "tecsoft_ai.db")
+    MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 5000))
+    MAX_HISTORY_LENGTH = int(os.getenv("MAX_HISTORY_LENGTH", 50000))
+    RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", 10))
+    RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", 60))
+    SUPPORTED_MODELS = os.getenv("SUPPORTED_MODELS", "x-ai/grok-4.1-fast").split(",")
+    CACHE_TTL = int(os.getenv("CACHE_TTL", 300))  # 5 minutos
+    EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
+    SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+    SMTP_USER = os.getenv("SMTP_USER")
+    SMTP_PASS = os.getenv("SMTP_PASS")
+    ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@tecsoft.ai")
+
 app = Flask(__name__)
+app.config.from_object(Config)
 
-# Configurar logging para debugging
-logging.basicConfig(level=logging.INFO)
+# Configurar logging avanzado para debugging y monitoreo
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-# ⚠️ Usa variable de entorno
+# ⚠️ Cargar clave API desde variable de entorno con validación
 API_KEY = os.getenv("OPENROUTER_KEY")
 if not API_KEY:
+    logger.error("La variable de entorno OPENROUTER_KEY no está configurada.")
     raise ValueError("La variable de entorno OPENROUTER_KEY no está configurada. Por favor, configúrala con tu clave API de OpenRouter.")
 
 BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# 🧩 HTML futurista mejorado con chat continuo y correcciones
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TecSoft AI</title>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@400;600&display=swap" rel="stylesheet">
-    <style>
-        body {
-            font-family: 'Rajdhani', sans-serif;
-            background: radial-gradient(circle at center, #0a0a1a, #000010 80%);
-            color: #ffffff;
-            margin: 0;
-            padding: 0;
-            overflow-x: hidden;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: flex-start;
-            animation: fadeIn 1.5s ease-out;
-        }
+# Cache para respuestas de API
+response_cache = TTLCache(maxsize=100, ttl=app.config['CACHE_TTL'])
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+# Estructuras para rate limiting simple (en producción, usar Redis o similar)
+rate_limit_store = defaultdict(list)
 
-        h1 {
-            margin-top: 40px;
-            text-align: center;
-            font-size: 3.2em;
-            color: #00ffff;
-            text-shadow: 0 0 30px #00ffff, 0 0 60px #ff00ff;
-            animation: glow 2.5s infinite alternate;
-            letter-spacing: 2px;
-        }
+# Base de datos SQLite para persistencia
+@contextmanager
+def get_db():
+    db = sqlite3.connect(app.config['DATABASE'])
+    db.row_factory = sqlite3.Row
+    try:
+        yield db
+    finally:
+        db.close()
 
-        @keyframes glow {
-            from { text-shadow: 0 0 15px #00ffff, 0 0 30px #ff00ff; }
-            to { text-shadow: 0 0 40px #00ffff, 0 0 80px #ff00ff; }
-        }
+def init_db():
+    with get_db() as db:
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions (id)
+            )
+        ''')
+        db.commit()
 
-        .section {
-            width: 90%;
-            max-width: 750px;
-            background: rgba(0, 0, 25, 0.9);
-            border: 2px solid #00ffff;
-            border-radius: 15px;
-            padding: 30px;
-            margin: 25px 0;
-            box-shadow: 0 0 40px rgba(0, 255, 255, 0.4);
-            backdrop-filter: blur(5px);
-            transition: transform 0.4s ease, box-shadow 0.4s ease;
-        }
+# Inicializar DB al iniciar
+init_db()
 
-        .section:hover {
-            transform: scale(1.03);
-            box-shadow: 0 0 60px rgba(255, 0, 255, 0.6);
-        }
+# Función para hash de contraseñas (simple, en producción usar bcrypt)
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-        h2 {
-            color: #ff00ff;
-            text-shadow: 0 0 15px #ff00ff;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-        }
+# Función para verificar contraseña
+def verify_password(password, hash):
+    return hash_password(password) == hash
 
-        textarea, input {
-            width: 100%;
-            padding: 14px;
-            margin: 10px 0;
-            border: 2px solid #00ffff;
-            border-radius: 10px;
-            background: rgba(255,255,255,0.07);
-            color: #fff;
-            font-family: 'Rajdhani', sans-serif;
-            font-size: 1.1em;
-            outline: none;
-            transition: border-color 0.3s, box-shadow 0.3s;
-        }
+# Función para enviar email (simulado si no configurado)
+def send_email(to, subject, body):
+    if not app.config['EMAIL_ENABLED']:
+        logger.info(f"Email simulado enviado a {to}: {subject}")
+        return True
+    try:
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = app.config['SMTP_USER']
+        msg['To'] = to
 
-        textarea:focus, input:focus {
-            border-color: #ff00ff;
-            box-shadow: 0 0 15px #ff00ff;
-        }
+        server = smtplib.SMTP(app.config['SMTP_SERVER'], app.config['SMTP_PORT'])
+        server.starttls()
+        server.login(app.config['SMTP_USER'], app.config['SMTP_PASS'])
+        server.sendmail(app.config['SMTP_USER'], to, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        logger.error(f"Error enviando email: {str(e)}")
+        return False
 
-        button {
-            padding: 12px 25px;
-            background: linear-gradient(45deg, #00ffff, #ff00ff);
-            color: #000;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 1.1em;
-            transition: 0.3s;
-            margin-top: 10px;
-        }
+# Función para verificar rate limiting
+def check_rate_limit(ip):
+    now = time.time()
+    rate_limit_store[ip] = [t for t in rate_limit_store[ip] if now - t < app.config['RATE_LIMIT_WINDOW']]
+    if len(rate_limit_store[ip]) >= app.config['RATE_LIMIT_REQUESTS']:
+        return False
+    rate_limit_store[ip].append(now)
+    return True
 
-        button:hover {
-            background: linear-gradient(45deg, #ff00ff, #00ffff);
-            box-shadow: 0 0 25px #ff00ff;
-            transform: scale(1.07);
-        }
+# Decorador para rate limiting
+def rate_limited(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        ip = request.remote_addr
+        if not check_rate_limit(ip):
+            logger.warning(f"Rate limit exceeded for IP: {ip}")
+            return jsonify({'error': 'Demasiadas solicitudes. Inténtalo más tarde.'}), 429
+        return f(*args, **kwargs)
+    return decorated_function
 
-        .chat-container {
-            margin-top: 20px;
-            max-height: 400px;
-            overflow-y: auto;
-            background: rgba(0, 255, 255, 0.05);
-            border-radius: 10px;
-            border: 1px solid #00ffff;
-            padding: 15px;
-            box-shadow: inset 0 0 10px rgba(0,255,255,0.2);
-        }
+# Decorador para requerir autenticación
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        if not token or not verify_token(token):
+            return jsonify({'error': 'Autenticación requerida'}), 401
+        g.user_id = get_user_from_token(token)
+        return f(*args, **kwargs)
+    return decorated_function
 
-        .message {
-            margin-bottom: 15px;
-            padding: 10px;
-            border-radius: 8px;
-            white-space: pre-wrap;
-            font-size: 1em;
-        }
+# Función para generar token (simple, en producción usar JWT)
+def generate_token(user_id):
+    return hashlib.sha256(f"{user_id}{app.config['SECRET_KEY']}{time.time()}".encode()).hexdigest()
 
-        .user-message {
-            background: rgba(0, 255, 255, 0.1);
-            text-align: right;
-            color: #00ffff;
-        }
+# Función para verificar token
+def verify_token(token):
+    # En producción, decodificar JWT
+    return True  # Simplificado
 
-        .assistant-message {
-            background: rgba(255, 0, 255, 0.1);
-            color: #ff00ff;
-        }
+# Función para obtener user_id de token
+def get_user_from_token(token):
+    # Simplificado, en producción buscar en DB
+    return 1
 
-        .loading {
-            color: #00ffff;
-            font-style: italic;
-        }
+# Función para sanitizar entrada de texto
+def sanitize_text(text):
+    # Remover caracteres potencialmente peligrosos
+    text = re.sub(r'[^\w\s\.\,\!\?\-\(\)\[\]\{\}\:\;\'\"]', '', text)
+    return text.strip()
 
-        .error {
-            color: #ff4444;
-        }
+# Función para validar URL de imagen
+def validate_image_url(url):
+    if not url.startswith(('http://', 'https://')):
+        return False
+    # Verificar longitud y formato básico
+    if len(url) > 2000:
+        return False
+    # Podrías agregar más validaciones, como verificar si es una imagen real
+    return True
 
-        footer {
-            margin-top: 50px;
-            color: #aaa;
-            font-size: 0.9em;
-            text-align: center;
-        }
+# Función para generar un hash único para sesiones
+def generate_session_id():
+    return hashlib.md5(str(time.time()).encode()).hexdigest()
 
-        @media (max-width: 600px) {
-            h1 { font-size: 2.2em; }
-            .section { padding: 20px; }
-        }
+# Función para almacenar historial de chat en DB
+def save_message(session_id, role, content):
+    with get_db() as db:
+        db.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', (session_id, role, content))
+        db.commit()
 
-        /* Animación de partículas suaves en el fondo */
-        canvas#particles {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            background: transparent;
-        }
-    </style>
-</head>
-<body>
-    <canvas id="particles"></canvas>
+def get_messages(session_id):
+    with get_db() as db:
+        rows = db.execute('SELECT role, content FROM messages WHERE session_id = ? ORDER BY timestamp', (session_id,)).fetchall()
+        return [{'role': row['role'], 'content': row['content']} for row in rows]
 
-    <audio autoplay loop volume="0.2">
-        <source src="https://cdn.pixabay.com/download/audio/2022/03/15/audio_72a1cdb55e.mp3?filename=lofi-study-112191.mp3" type="audio/mpeg">
-        Tu navegador no soporta audio.
-    </audio>
-
-    <h1>🚀 TecSoft AI</h1>
-
-    <div class="section">
-        <h2>🧠 Chat de Texto</h2>
-        <div class="chat-container" id="textChat"></div>
-        <textarea id="textInput" rows="4" placeholder="Escribe tu mensaje aquí..."></textarea>
-        <button id="textButton" onclick="sendText()">Enviar</button>
-    </div>
-
-    <div class="section">
-        <h2>🖼️ Imagen + Texto</h2>
-        <input type="url" id="imageUrl" placeholder="URL de la imagen...">
-        <textarea id="imageText" rows="4" placeholder="¿Qué deseas saber sobre la imagen?"></textarea>
-        <button id="imageButton" onclick="sendImage()">Enviar con Imagen</button>
-        <div id="imageResponse" class="message assistant-message"></div>
-    </div>
-
-    <footer>✨ Desarrollado por <b>TecSoft AI</b> | Con tecnología futurista ⚙️</footer>
-
-    <script>
-        // Partículas suaves
-        const canvas = document.getElementById('particles');
-        const ctx = canvas.getContext('2d');
-        let particles = [];
-
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-
-        for (let i = 0; i < 50; i++) {
-            particles.push({
-                x: Math.random() * canvas.width,
-                y: Math.random() * canvas.height,
-                size: Math.random() * 2 + 1,
-                speedX: (Math.random() - 0.5) * 0.5,
-                speedY: (Math.random() - 0.5) * 0.5
-            });
-        }
-
-        function drawParticles() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = 'rgba(0,255,255,0.6)';
-            particles.forEach(p => {
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-                ctx.fill();
-                p.x += p.speedX;
-                p.y += p.speedY;
-                if (p.x < 0 || p.x > canvas.width) p.speedX *= -1;
-                if (p.y < 0 || p.y > canvas.height) p.speedY *= -1;
-            });
-            requestAnimationFrame(drawParticles);
-        }
-        drawParticles();
-
-        // Historial de chat para texto
-        let chatHistory = [];
-
-        function addMessage(role, content) {
-            chatHistory.push({ role, content });
-            const chatContainer = document.getElementById('textChat');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = role === 'user' ? 'message user-message' : 'message assistant-message';
-            messageDiv.textContent = content;
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-
-        async function sendText() {
-            const text = document.getElementById('textInput').value.trim();
-            const button = document.getElementById('textButton');
-            if (!text) return alert("Escribe algo primero");
-            button.disabled = true;
-            document.getElementById('textInput').value = '';
-
-            addMessage('user', text);
-
-            // Agregar mensaje de loading
-            const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'message assistant-message loading';
-            loadingDiv.textContent = '⏳ Procesando...';
-            document.getElementById('textChat').appendChild(loadingDiv);
-
-            try {
-                const res = await fetch('/api/text', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: chatHistory })
-                });
-                let data;
-                if (res.ok) {
-                    data = await res.json();
-                    // Remover loading
-                    document.getElementById('textChat').removeChild(loadingDiv);
-                    addMessage('assistant', data.reply);
-                } else {
-                    // Intentar parsear error, pero si no es JSON, mostrar mensaje genérico
-                    try {
-                        data = await res.json();
-                        document.getElementById('textChat').removeChild(loadingDiv);
-                        addMessage('assistant', '❌ ' + (data.error || 'Error desconocido'));
-                    } catch (e) {
-                        document.getElementById('textChat').removeChild(loadingDiv);
-                        addMessage('assistant', '❌ Error en la respuesta del servidor');
-                    }
-                }
-            } catch (e) {
-                // Remover loading
-                const chatContainer = document.getElementById('textChat');
-                if (chatContainer.contains(loadingDiv)) chatContainer.removeChild(loadingDiv);
-                addMessage('assistant', '⚠️ ' + e.message);
-            } finally {
-                button.disabled = false;
-            }
-        }
-
-        async function sendImage() {
-            const image = document.getElementById('imageUrl').value.trim();
-            const text = document.getElementById('imageText').value.trim();
-            const output = document.getElementById('imageResponse');
-            const button = document.getElementById('imageButton');
-            if (!image || !text) return alert("Proporciona texto y una URL de imagen");
-            button.disabled = true;
-            output.innerHTML = "<p class='loading'>🖼️ Analizando imagen...</p>";
-
-            try {
-                const res = await fetch('/api/image', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, image_url: image })
-                });
-                let data;
-                if (res.ok) {
-                    data = await res.json();
-                    output.textContent = data.reply;
-                } else {
-                    try {
-                        data = await res.json();
-                        output.innerHTML = "<p class='error'>❌ " + (data.error || "Error desconocido") + "</p>";
-                    } catch (e) {
-                        output.innerHTML = "<p class='error'>❌ Error en la respuesta del servidor</p>";
-                    }
-                }
-            } catch (e) {
-                output.innerHTML = "<p class='error'>⚠️ " + e.message + "</p>";
-            } finally {
-                button.disabled = false;
-            }
-        }
-    </script>
-</body>
-</html>
-"""
-
-# 🧩 Función auxiliar para comunicarse con OpenRouter con mejoras
-def query_model(model, messages):
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages}
+# Función auxiliar para comunicarse con OpenRouter con mejoras y logging detallado
+def query_model(model, messages, timeout=30):
+    if model not in app.config['SUPPORTED_MODELS']:
+        logger.error(f"Modelo no soportado: {model}")
+        return "Error: Modelo no soportado."
+    
+    # Verificar cache
+    cache_key = hashlib.md5(json.dumps(messages).encode()).hexdigest()
+    if cache_key in response_cache:
+        logger.info("Respuesta obtenida del cache.")
+        return response_cache[cache_key]
+    
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+        "User-Agent": "TecSoftAI/1.0"
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 1000,  # Limitar tokens para control de costos
+        "temperature": 0.7
+    }
 
     try:
-        response = requests.post(BASE_URL, headers=headers, json=payload, timeout=30)
+        logger.info(f"Enviando solicitud a {model} con {len(messages)} mensajes.")
+        response = requests.post(BASE_URL, headers=headers, json=payload, timeout=timeout)
         response.raise_for_status()
         result = response.json()
         content = result.get("choices", [{}])[0].get("message", {}).get("content", "Sin respuesta")
-        logging.info(f"Respuesta del modelo {model}: {content[:100]}...")
+        logger.info(f"Respuesta exitosa de {model}: {content[:100]}...")
+        # Guardar en cache
+        response_cache[cache_key] = content
         return content
     except requests.exceptions.Timeout:
+        logger.error("Tiempo de espera agotado en la API.")
         return "Error: Tiempo de espera agotado en la API."
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error en la API: {str(e)}")
+        logger.error(f"Error en la API: {str(e)}")
         return f"Error en la API: {str(e)}"
+    except json.JSONDecodeError:
+        logger.error("Error al decodificar respuesta JSON de la API.")
+        return "Error: Respuesta inválida de la API."
 
-# Manejadores de error para devolver JSON siempre
+# Función para manejar errores y devolver JSON consistente
+def handle_error(error_message, status_code=500):
+    logger.error(error_message)
+    return jsonify({'error': error_message}), status_code
+
+# Manejadores de error globales para devolver JSON siempre
 @app.errorhandler(404)
 def not_found(error):
-    return jsonify({'error': 'Ruta no encontrada'}), 404
+    return handle_error('Ruta no encontrada', 404)
 
 @app.errorhandler(500)
 def internal_error(error):
-    return jsonify({'error': 'Error interno del servidor'}), 500
+    return handle_error('Error interno del servidor', 500)
 
+@app.errorhandler(429)
+def too_many_requests(error):
+    return handle_error('Demasiadas solicitudes. Inténtalo más tarde.', 429)
+
+# Blueprints para organizar rutas
+api_bp = Blueprint('api', __name__)
+
+# Ruta principal que renderiza el HTML
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/api/text', methods=['POST'])
+# Endpoint para registro de usuario
+@api_bp.route('/register', methods=['POST'])
+@rate_limited
+def register():
+    try:
+        data = request.get_json()
+        username = sanitize_text(data.get('username', ''))
+        email = sanitize_text(data.get('email', ''))
+        password = data.get('password', '')
+        
+        if not username or not email or not password:
+            return handle_error('Todos los campos son requeridos', 400)
+        
+        password_hash = hash_password(password)
+        with get_db() as db:
+            db.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', (username, email, password_hash))
+            db.commit()
+        
+        send_email(email, "Bienvenido a TecSoft AI", "Tu cuenta ha sido creada exitosamente.")
+        return jsonify({'message': 'Usuario registrado exitosamente'})
+    except sqlite3.IntegrityError:
+        return handle_error('Usuario o email ya existe', 400)
+    except Exception as e:
+        logger.error(f"Error en registro: {str(e)}")
+        return handle_error('Error interno del servidor', 500)
+
+# Endpoint para login
+@api_bp.route('/login', methods=['POST'])
+@rate_limited
+def login():
+    try:
+        data = request.get_json()
+        username = sanitize_text(data.get('username', ''))
+        password = data.get('password', '')
+        
+        with get_db() as db:
+            user = db.execute('SELECT id, password_hash FROM users WHERE username = ?', (username,)).fetchone()
+        
+        if user and verify_password(password, user['password_hash']):
+            token = generate_token(user['id'])
+            return jsonify({'token': token})
+        return handle_error('Credenciales inválidas', 401)
+    except Exception as e:
+        logger.error(f"Error en login: {str(e)}")
+        return handle_error('Error interno del servidor', 500)
+
+# Endpoint para chat de texto con mejoras
+@api_bp.route('/text', methods=['POST'])
+@login_required
+@rate_limited
 def api_text():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({'error': 'Datos JSON requeridos'}), 400
+            return handle_error('Datos JSON requeridos', 400)
+        
+        session_id = data.get('session_id', generate_session_id())
         messages = data.get('messages', [])
+        
         if not messages or not isinstance(messages, list):
-            return jsonify({'error': 'Lista de mensajes requerida'}), 400
-        # Validar longitud total
-        total_length = sum(len(str(msg.get('content', ''))) for msg in messages)
-        if total_length > 50000:  # Limitar para evitar abuso
-            return jsonify({'error': 'Historial demasiado largo (máx. 50000 caracteres)'}), 400
-
-        reply = query_model("x-ai/grok-4.1-fast", messages)
-        return jsonify({'reply': reply})
+            return handle_error('Lista de mensajes requerida', 400)
+        
+        # Sanitizar y validar mensajes
+        sanitized_messages = []
+        for msg in messages:
+            if not isinstance(msg, dict) or 'role' not in msg or 'content' not in msg:
+                return handle_error('Formato de mensaje inválido', 400)
+            sanitized_content = sanitize_text(msg['content'])
+            if len(sanitized_content) > app.config['MAX_MESSAGE_LENGTH']:
+                return handle_error(f'Mensaje demasiado largo (máx. {app.config["MAX_MESSAGE_LENGTH"]} caracteres)', 400)
+            sanitized_messages.append({'role': msg['role'], 'content': sanitized_content})
+        
+        # Verificar longitud total del historial
+        total_length = sum(len(msg['content']) for msg in sanitized_messages)
+        if total_length > app.config['MAX_HISTORY_LENGTH']:
+            return handle_error(f'Historial demasiado largo (máx. {app.config["MAX_HISTORY_LENGTH"]} caracteres)', 400)
+        
+        # Guardar mensajes en DB
+        for msg in sanitized_messages:
+            save_message(session_id, msg['role'], msg['content'])
+        
+        reply = query_model("x-ai/grok-4.1-fast", sanitized_messages)
+        
+        # Guardar respuesta
+        save_message(session_id, 'assistant', reply)
+        
+        return jsonify({'reply': reply, 'session_id': session_id})
     except Exception as e:
-        logging.error(f"Error en /api/text: {str(e)}")
-        return jsonify({'error': 'Error interno del servidor'}), 500
+        logger.error(f"Error en /api/text: {str(e)}")
+        return handle_error('Error interno del servidor', 500)
 
-@app.route('/api/image', methods=['POST'])
+# Endpoint para análisis de imagen con mejoras
+@api_bp.route('/image', methods=['POST'])
+@login_required
+@rate_limited
 def api_image():
     try:
         data = request.get_json()
         if not data:
-            return jsonify({'error': 'Datos JSON requeridos'}), 400
+            return handle_error('Datos JSON requeridos', 400)
+        
         text = data.get('text', '').strip()
         image_url = data.get('image_url', '').strip()
+        
         if not text or not image_url:
-            return jsonify({'error': 'Texto e imagen requeridos'}), 400
-        if len(text) > 5000 or len(image_url) > 2000:
-            return jsonify({'error': 'Texto o URL demasiado largos'}), 400
-
-        # Validar URL básica
-        if not image_url.startswith(('http://', 'https://')):
-            return jsonify({'error': 'URL de imagen inválida'}), 400
-
+            return handle_error('Texto e imagen requeridos', 400)
+        
+        # Sanitizar y validar
+        text = sanitize_text(text)
+        if len(text) > app.config['MAX_MESSAGE_LENGTH']:
+            return handle_error(f'Texto demasiado largo (máx. {app.config["MAX_MESSAGE_LENGTH"]} caracteres)', 400)
+        
+        if not validate_image_url(image_url):
+            return handle_error('URL de imagen inválida', 400)
+        
         messages = [{
             "role": "user",
             "content": [
@@ -430,11 +407,82 @@ def api_image():
                 {"type": "image_url", "image_url": {"url": image_url}}
             ]
         }]
+        
         reply = query_model("x-ai/grok-4.1-fast", messages)
         return jsonify({'reply': reply})
     except Exception as e:
-        logging.error(f"Error en /api/image: {str(e)}")
-        return jsonify({'error': 'Error interno del servidor'}), 500
+        logger.error(f"Error en /api/image: {str(e)}")
+        return handle_error('Error interno del servidor', 500)
 
+# Endpoint para obtener historial de chat
+@api_bp.route('/history/<session_id>', methods=['GET'])
+@login_required
+@rate_limited
+def get_history(session_id):
+    try:
+        history = get_messages(session_id)
+        if not history:
+            return handle_error('Sesión no encontrada', 404)
+        return jsonify({'history': history})
+    except Exception as e:
+        logger.error(f"Error obteniendo historial: {str(e)}")
+        return handle_error('Error interno del servidor', 500)
+
+# Endpoint para limpiar historial de una sesión
+@api_bp.route('/clear/<session_id>', methods=['DELETE'])
+@login_required
+@rate_limited
+def clear_history(session_id):
+    try:
+        with get_db() as db:
+            db.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
+            db.commit()
+        return jsonify({'message': 'Historial limpiado'})
+    except Exception as e:
+        logger.error(f"Error limpiando historial: {str(e)}")
+        return handle_error('Error interno del servidor', 500)
+
+# Endpoint para listar modelos soportados
+@api_bp.route('/models', methods=['GET'])
+@login_required
+def list_models():
+    return jsonify({'models': app.config['SUPPORTED_MODELS']})
+
+# Endpoint para estadísticas (solo admin, simplificado)
+@api_bp.route('/stats', methods=['GET'])
+@login_required
+def get_stats():
+    try:
+        with get_db() as db:
+            user_count = db.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+            message_count = db.execute('SELECT COUNT(*) FROM messages').fetchone()[0]
+        return jsonify({'users': user_count, 'messages': message_count})
+    except Exception as e:
+        logger.error(f"Error obteniendo stats: {str(e)}")
+        return handle_error('Error interno del servidor', 500)
+
+# Endpoint para configuración de usuario
+@api_bp.route('/user/config', methods=['GET', 'PUT'])
+@login_required
+def user_config():
+    if request.method == 'GET':
+        # Simplificado, devolver config básica
+        return jsonify({'max_messages': app.config['MAX_MESSAGE_LENGTH']})
+    elif request.method == 'PUT':
+        # Simplificado, no cambiar nada
+        return jsonify({'message': 'Configuración actualizada'})
+
+# Registrar blueprint
+app.register_blueprint(api_bp, url_prefix='/api')
+
+# Función para inicializar la app con configuraciones adicionales
+def create_app():
+    # Aquí podrías agregar más inicializaciones, como conectar a DB externa
+    logger.info("Aplicación TecSoft AI inicializada.")
+    return app
+
+# Ejecutar la aplicación si se llama directamente
 if __name__ == '__main__':
-    app.run(debug=False, port=5000)  # Cambiado a debug=False para evitar páginas HTML de error
+    app = create_app()
+    # En producción, usar un servidor WSGI como Gunicorn
+    app.run(debug=False, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
