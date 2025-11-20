@@ -1,6 +1,7 @@
 Flask
-flask-limiter
-flask-cors
-python-dotenv
 requests
+python-dotenv
+Flask-Limiter
+Flask-Cors
+markdown
 gunicorn
