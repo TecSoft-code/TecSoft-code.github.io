@@ -1,175 +1,202 @@
-from flask import Flask, request, jsonify, render_template_string, Response, Blueprint, g, abort, stream_with_context
-import requests
-import json
+# app.py - Versión mejorada y corregida
 import os
-import logging
-from dotenv import load_dotenv
-from functools import wraps
-import time
-from collections import defaultdict
 import re
+import time
+import json
 import sqlite3
-from contextlib import contextmanager
+import logging
+import secrets
 import smtplib
 from email.mime.text import MIMEText
-import secrets
-from werkzeug.security import generate_password_hash, check_password_hash
-import jwt
+from contextlib import contextmanager
+from threading import Lock, Thread
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from threading import Lock, Thread # 💡 Usar Thread para operaciones asíncronas (guardado)
-from flask_cors import CORS # 🔒 CORS para entornos de producción/frontend
-from waitress import serve # 💡 Servidor WSGI de producción (alternativa a Gunicorn)
+from functools import wraps
 
-# --- Configuración y Entorno ---
+import requests
+import jwt
+from dotenv import load_dotenv
+from flask import (
+    Flask, g, request, jsonify, abort, Response, Blueprint,
+    stream_with_context
+)
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_cors import CORS
+from waitress import serve
+
+# --- Cargar entorno ---
 load_dotenv()
 
-# Clase de Configuración Detallada
+# --- Configuración ---
 class Config:
-    # Seguridad
     SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
-    JWT_SECRET = os.getenv("JWT_SECRET", SECRET_KEY) 
+    JWT_SECRET = os.getenv("JWT_SECRET", SECRET_KEY)
     JWT_EXPIRATION_DAYS = int(os.getenv("JWT_EXPIRATION_DAYS", 7))
-    CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(',') # Especificar dominios
-    
-    # Base de Datos
+    CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(',')
     DATABASE = os.getenv("DATABASE_PATH", "tecsoft_ai.db")
-    
-    # Límites de Usuario/Sistema
     MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 5000))
     MAX_HISTORY_LENGTH = int(os.getenv("MAX_HISTORY_LENGTH", 50000))
     RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", 10))
     RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", 60))
-    
-    # API de IA
     OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
-    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+    BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
     SUPPORTED_MODELS = os.getenv("SUPPORTED_MODELS", "x-ai/grok-4.1-fast,mistralai/mixtral-8x7b-instruct").split(",")
-    DEFAULT_MODEL = SUPPORTED_MODELS[0]
-    
-    # Correo Electrónico
+    DEFAULT_MODEL = SUPPORTED_MODELS[0] if SUPPORTED_MODELS else None
     EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
     SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
     SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
     SMTP_USER = os.getenv("SMTP_USER")
     SMTP_PASS = os.getenv("SMTP_PASS")
+    # Timeouts
+    OPENROUTER_TIMEOUT = int(os.getenv("OPENROUTER_TIMEOUT", 60))
+    # Limits
+    SESSION_ID_MAX_LEN = int(os.getenv("SESSION_ID_MAX_LEN", 64))
 
-# --- Inicialización de Flask y Componentes de Arquitectura ---
+# --- Aplicación ---
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# 🔒 Habilitar CORS para permitir llamadas desde un frontend separado
+# --- CORS ---
 CORS(app, resources={r"/api/*": {"origins": app.config['CORS_ALLOWED_ORIGINS']}})
 
-# ⚠️ Validación Crítica
+# --- Validación inicial crítica ---
 if not app.config['OPENROUTER_KEY']:
     raise ValueError("La variable de entorno OPENROUTER_KEY es obligatoria.")
 
-# --- Logging Estructurado (Mejorado) ---
+# --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
-    format='{"time": "%(asctime)s", "name": "%(name)s", "level": "%(levelname)s", "message": "%(message)s"}',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
+    format='{"time":"%(asctime)s","name":"%(name)s","level":"%(levelname)s","message":"%(message)s"}',
+    handlers=[logging.FileHandler('app.log'), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
-# --- Base de Datos SQLite (Manejador de Contexto) ---
+# --- DB context manager ---
 @contextmanager
 def get_db():
+    """
+    Provee una conexión SQLite almacenada en flask.g por request.
+    No usar la misma conexión entre hilos.
+    """
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = sqlite3.connect(app.config['DATABASE'])
+        # Por seguridad, no permitir check_same_thread en conexiones globales
+        db = g._database = sqlite3.connect(app.config['DATABASE'], detect_types=sqlite3.PARSE_DECLTYPES)
         db.row_factory = sqlite3.Row
-    yield db
+    try:
+        yield db
+    finally:
+        # No cerramos aquí (teardown_appcontext lo hace) para preservar la conexión por request
+        pass
 
 @app.teardown_appcontext
 def close_connection(exception):
     db = getattr(g, '_database', None)
     if db is not None:
-        db.close()
+        try:
+            db.close()
+        except Exception as e:
+            logger.warning(f"Error cerrando conexión DB: {e}")
+        g._database = None
 
 def init_db():
+    """Inicializa las tablas (usar correctamente el context manager)."""
     with app.app_context():
-        db = get_db()
-        db.executescript('''
-            -- Roles: 'user' o 'admin'
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT DEFAULT 'user' NOT NULL, -- 💡 Campo de Rol
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions (id)
-            );
-        ''')
-        db.commit()
+        with get_db() as db:
+            db.executescript('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT DEFAULT 'user' NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                );
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions (id)
+                );
+            ''')
+            db.commit()
+            logger.info("Base de datos inicializada.")
 
-# Inicializar DB al iniciar
+# Inicializar DB
 with app.app_context():
     init_db()
 
-# --- Concurrencia y Rate Limiting Thread-Safe ---
+# --- Rate limiting (thread-safe) ---
 rate_limit_store = defaultdict(list)
-rate_limit_lock = Lock() 
+rate_limit_lock = Lock()
+
+def _get_remote_ip():
+    # Respetar cabecera X-Forwarded-For si existe (proxy/reverse-proxy)
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        # tomar la primer IP
+        return xff.split(',')[0].strip()
+    return request.remote_addr or 'unknown'
 
 def check_rate_limit(ip):
     with rate_limit_lock:
         now = time.time()
-        rate_limit_store[ip] = [t for t in rate_limit_store[ip] if now - t < app.config['RATE_LIMIT_WINDOW']]
+        window = app.config['RATE_LIMIT_WINDOW']
+        history = rate_limit_store[ip]
+        # limpiar entradas viejas
+        rate_limit_store[ip] = [t for t in history if now - t < window]
         if len(rate_limit_store[ip]) >= app.config['RATE_LIMIT_REQUESTS']:
             return False
         rate_limit_store[ip].append(now)
         return True
 
-# --- Funciones de Seguridad y Persistencia ---
+# --- Utilidades DB/Seguridad ---
 def generate_session_id():
-    return secrets.token_urlsafe(16)
+    return secrets.token_urlsafe(32)[:app.config['SESSION_ID_MAX_LEN']]
 
 def save_session(session_id, user_id):
-    # Usar INSERT OR IGNORE para que no falle si la sesión ya existe (manejo de sesiones continuas)
-    with get_db() as db:
-        db.execute('INSERT OR IGNORE INTO sessions (id, user_id) VALUES (?, ?)', (session_id, user_id))
-        db.commit()
+    try:
+        with get_db() as db:
+            db.execute('INSERT OR IGNORE INTO sessions (id, user_id) VALUES (?, ?)', (session_id, user_id))
+            db.commit()
+    except Exception as e:
+        logger.error(f"Error guardando sesión {session_id}: {e}")
 
-# 💡 Función Asíncrona para guardar mensajes (no bloquea el stream)
 def save_message_async(session_id, role, content):
-    def run_save():
+    """
+    Guarda mensajes en hilo separado. Se abre una nueva conexión para evitar problemas
+    con el 'g' de Flask que no es seguro entre hilos.
+    """
+    def run_save(sid, r, c):
         try:
-            # Reabrir una conexión dentro del thread
-            temp_db = sqlite3.connect(app.config['DATABASE'])
-            temp_db.row_factory = sqlite3.Row
-            temp_db.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', (session_id, role, content))
-            temp_db.commit()
-            temp_db.close()
-            logger.info(f"Mensaje guardado de forma asíncrona para sesión: {session_id}")
-        except Exception as e:
-            logger.error(f"Error asíncrono guardando mensaje: {str(e)}")
+            conn = sqlite3.connect(app.config['DATABASE'])
+            conn.row_factory = sqlite3.Row
+            conn.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', (sid, r, c))
+            conn.commit()
+            conn.close()
+            logger.info(f"Mensaje guardado async para sesión {sid} (role={r})")
+        except Exception as exc:
+            logger.error(f"Error asíncrono guardando mensaje: {exc}")
 
-    Thread(target=run_save).start()
-    
-# --- JWT y Auth ---
+    # Lanzar hilo daemon para que no impida shutdown
+    t = Thread(target=run_save, args=(session_id, role, content), daemon=True)
+    t.start()
+
 def generate_auth_token(user_id):
     try:
         payload = {
             'exp': datetime.now(timezone.utc) + timedelta(days=app.config['JWT_EXPIRATION_DAYS']),
             'iat': datetime.now(timezone.utc),
-            'sub': user_id
+            'sub': int(user_id)
         }
         return jwt.encode(payload, app.config['JWT_SECRET'], algorithm='HS256')
     except Exception as e:
@@ -179,7 +206,7 @@ def generate_auth_token(user_id):
 def verify_auth_token(token):
     try:
         payload = jwt.decode(token, app.config['JWT_SECRET'], algorithms=['HS256'])
-        return payload['sub']
+        return int(payload.get('sub'))
     except jwt.ExpiredSignatureError:
         return 'expired'
     except jwt.InvalidTokenError:
@@ -189,29 +216,25 @@ def verify_auth_token(token):
 def rate_limited(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        ip = request.remote_addr
+        ip = _get_remote_ip()
         if not check_rate_limit(ip):
             logger.warning(f"Rate limit exceeded for IP: {ip}")
-            abort(429)
+            abort(429, description="Límite de peticiones excedido.")
         return f(*args, **kwargs)
     return decorated_function
 
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
             abort(401, description='Autenticación requerida. Token Bearer faltante.')
-        
-        token = auth_header.split(' ')[1]
+        token = auth_header.split(' ', 1)[1]
         user_id = verify_auth_token(token)
-        
         if user_id == 'expired':
-             abort(401, description='Token de autenticación expirado.')
-        
+            abort(401, description='Token de autenticación expirado.')
         if not user_id:
             abort(401, description='Token de autenticación inválido.')
-        
         g.user_id = user_id
         return f(*args, **kwargs)
     return decorated_function
@@ -219,247 +242,280 @@ def login_required(f):
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        user_id = g.user_id
+        user_id = getattr(g, 'user_id', None)
+        if not user_id:
+            abort(401, description='Autenticación requerida.')
         with get_db() as db:
-            user = db.execute('SELECT role FROM users WHERE id = ?', (user_id,)).fetchone()
-            if not user or user['role'] != 'admin':
+            row = db.execute('SELECT role FROM users WHERE id = ?', (user_id,)).fetchone()
+            if not row or row['role'] != 'admin':
                 abort(403, description='Permiso de administrador requerido.')
         return f(*args, **kwargs)
     return decorated_function
 
-# --- Manejadores de Error Centralizados ---
-# 💡 Usar abort() en vez de return jsonify para activar estos handlers
+# --- Handlers de error centralizados ---
 @app.errorhandler(400)
 @app.errorhandler(401)
 @app.errorhandler(403)
 @app.errorhandler(404)
 @app.errorhandler(429)
 def handle_http_error(e):
-    # Captura el mensaje de error personalizado de abort(status_code, description=...)
     status_code = getattr(e, 'code', 500)
-    description = getattr(e, 'description', 'Error interno del servidor')
-    
-    logger.error(f"HTTP Error {status_code}: {description}")
+    description = getattr(e, 'description', 'Error')
+    logger.error(f"HTTP {status_code} - {description}")
     return jsonify({'error': description}), status_code
 
 @app.errorhandler(500)
 def internal_error(e):
-    logger.exception('Error interno del servidor') 
-    return jsonify({'error': 'Error interno del servidor. Por favor, revisa el log.'}), 500
+    logger.exception('Error interno del servidor')
+    return jsonify({'error': 'Error interno del servidor. Revisa el log.'}), 500
 
-# --- Lógica de IA (Streaming) ---
-def stream_query_model(messages, model, temperature, max_tokens, timeout=60):
+# --- Implementación de funciones faltantes usadas por rutas ---
+def send_email(to_email, subject, body):
+    """Enviar email de forma segura si está habilitado."""
+    if not app.config['EMAIL_ENABLED']:
+        logger.info("Email no enviado (EMAIL_ENABLED=False).")
+        return False
+    try:
+        msg = MIMEText(body, 'plain', 'utf-8')
+        msg['Subject'] = subject
+        msg['From'] = app.config['SMTP_USER']
+        msg['To'] = to_email
+
+        server = smtplib.SMTP(app.config['SMTP_SERVER'], app.config['SMTP_PORT'], timeout=10)
+        server.starttls()
+        server.login(app.config['SMTP_USER'], app.config['SMTP_PASS'])
+        server.send_message(msg)
+        server.quit()
+        logger.info(f"Email enviado a {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"Error enviando email a {to_email}: {e}")
+        return False
+
+def get_messages(session_id, limit=50):
+    """Recupera mensajes de la sesión. Devuelve lista de dicts [{'role':..., 'content': ...}, ...]"""
+    try:
+        with get_db() as db:
+            rows = db.execute(
+                'SELECT role, content FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?',
+                (session_id, limit)
+            ).fetchall()
+            return [{'role': r['role'], 'content': r['content']} for r in rows]
+    except Exception as e:
+        logger.error(f"Error obteniendo historial para session {session_id}: {e}")
+        return []
+
+# --- Lógica de streaming hacia OpenRouter (con SSE) ---
+def stream_query_model(messages, model, temperature, max_tokens, timeout=None):
+    """
+    Llama a la API externa con stream=True y emite chunks en formato SSE.
+    Si la API devuelve errores, se envía un chunk con 'error'.
+    """
+    timeout = timeout or app.config['OPENROUTER_TIMEOUT']
     if model not in app.config['SUPPORTED_MODELS']:
         yield f"data: {json.dumps({'error': 'Modelo no soportado.'})}\n\n"
         return
-        
+
     headers = {
-        "Authorization": f"Bearer {app.config['OPENROUTER_KEY']}", # 💡 Usar config
+        "Authorization": f"Bearer {app.config['OPENROUTER_KEY']}",
         "Content-Type": "application/json",
         "User-Agent": "TecSoftAI/3.0 - Production"
     }
     payload = {
         "model": model,
         "messages": messages,
-        "max_tokens": max_tokens, # 💡 Parámetro dinámico
-        "temperature": temperature, # 💡 Parámetro dinámico
+        "max_tokens": int(max_tokens),
+        "temperature": float(temperature),
         "stream": True
     }
 
     try:
-        logger.info(f"Solicitud STREAM: Modelo={model}, Temp={temperature}")
-        response = requests.post(app.config['BASE_URL'], headers=headers, json=payload, stream=True, timeout=timeout)
-        response.raise_for_status()
+        logger.info(f"STREAM REQ model={model} temp={temperature} max_tokens={max_tokens}")
+        resp = requests.post(app.config['BASE_URL'], headers=headers, json=payload, stream=True, timeout=timeout)
+        resp.raise_for_status()
 
-        for line in response.iter_lines():
-            if line:
-                line_str = line.decode('utf-8')
-                if line_str.startswith('data: '):
-                    data = line_str[6:]
-                    if data.strip() == '[DONE]':
-                        break
-                    
-                    try:
-                        chunk = json.loads(data)
-                        content_chunk = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-                        
-                        if content_chunk:
-                            # 💡 Ceder el chunk envuelto en formato SSE (Server-Sent Events)
-                            yield f"data: {json.dumps({'text': content_chunk})}\n\n"
-                            
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Error decodificando chunk JSON: {e}")
-                        continue
-        
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            # OpenRouter -> prefijo "data: " esperado; si no existe intentamos parsear
+            line_str = line
+            if line_str.startswith('data: '):
+                data = line_str[6:].strip()
+            else:
+                data = line_str.strip()
+
+            if data == '[DONE]':
+                break
+
+            try:
+                chunk = json.loads(data)
+                content_chunk = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                if content_chunk:
+                    yield f"data: {json.dumps({'text': content_chunk})}\n\n"
+            except json.JSONDecodeError:
+                # No JSON válido; enviar como raw para diagnóstico
+                yield f"data: {json.dumps({'raw': data})}\n\n"
+
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error en la API (Stream): {str(e)}")
-        # Enviar error en formato SSE
+        logger.error(f"Error en la API (Stream): {e}")
         yield f"data: {json.dumps({'error': f'Error en la API: {str(e)}'})}\n\n"
     except Exception as e:
-        logger.error(f"Error desconocido en streaming: {str(e)}")
+        logger.exception("Error desconocido en streaming")
         yield f"data: {json.dumps({'error': f'Error interno: {str(e)}'})}\n\n"
 
-# --- Blueprints (Rutas) ---
-api_bp = Blueprint('api', __name__)
+# --- Blueprints y rutas ---
+api_bp = Blueprint('api', __name__, url_prefix='/api')
 
-# --- Rutas de Auth ---
 @api_bp.route('/register', methods=['POST'])
 @rate_limited
 def register():
-    data = request.get_json()
-    username = re.sub(r'\s+', '', data.get('username', '')) # 💡 Limpiar espacios
-    email = data.get('email', '').strip()
-    password = data.get('password', '')
-    
-    if not (username and email and password and '@' in email):
-        abort(400, description='Usuario, email válido y contraseña son requeridos')
-    
+    data = request.get_json(silent=True) or {}
+    username = re.sub(r'\s+', '', (data.get('username') or '')).lower()
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not username or not email or not password or '@' not in email:
+        abort(400, description='Usuario, email válido y contraseña son requeridos.')
+
+    if len(username) < 3 or len(password) < 6:
+        abort(400, description='Nombre de usuario mínimo 3 caracteres y contraseña mínimo 6 caracteres.')
+
     password_hash = generate_password_hash(password)
     try:
         with get_db() as db:
             db.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', (username, email, password_hash))
             db.commit()
-        
-        # Uso de threading para enviar email (no bloquea la solicitud HTTP)
-        Thread(target=send_email, args=(email, "Bienvenido a TecSoft AI", "Tu cuenta ha sido creada exitosamente.")).start()
-        
-        return jsonify({'message': 'Usuario registrado exitosamente. Por favor, inicia sesión.'}), 201
     except sqlite3.IntegrityError:
-        abort(400, description='Usuario o email ya existe')
+        abort(400, description='Usuario o email ya existe.')
+    except Exception as e:
+        logger.error(f"Error registrando usuario: {e}")
+        abort(500, description='Error registrando usuario.')
+
+    # Enviar email en un hilo (no bloqueante)
+    Thread(target=send_email, args=(email, "Bienvenido a TecSoft AI", "Tu cuenta ha sido creada exitosamente."), daemon=True).start()
+    return jsonify({'message': 'Usuario registrado exitosamente. Por favor, inicia sesión.'}), 201
 
 @api_bp.route('/login', methods=['POST'])
 @rate_limited
 def login():
-    data = request.get_json()
-    username = data.get('username', '').strip()
-    password = data.get('password', '')
-    
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not username or not password:
+        abort(400, description='Usuario y contraseña son requeridos.')
+
     with get_db() as db:
         user = db.execute('SELECT id, password_hash FROM users WHERE username = ?', (username,)).fetchone()
-    
+
     if user and check_password_hash(user['password_hash'], password):
         token = generate_auth_token(user['id'])
         if token:
             return jsonify({'token': token}), 200
-        abort(500, description='Error generando token')
-    
-    abort(401, description='Credenciales inválidas')
+        abort(500, description='Error generando token.')
+    abort(401, description='Credenciales inválidas.')
 
-# --- Ruta de Chat (Máximo Nivel de Flexibilidad) ---
 @api_bp.route('/text/stream', methods=['POST'])
 @login_required
 @rate_limited
 def api_text_stream():
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
-        abort(400, description='Datos JSON requeridos')
-    
+        abort(400, description='Datos JSON requeridos.')
+
     user_id = g.user_id
     session_id = data.get('session_id') or generate_session_id()
-    prompt = data.get('prompt', '').strip()
-    
-    # 💡 Parámetros de IA dinámicos (para flexibilidad OpenRouter)
-    model_name = data.get('model', app.config['DEFAULT_MODEL'])
-    temperature = data.get('temperature', 0.7)
-    max_tokens = data.get('max_tokens', 2048)
-    
+    if len(session_id) > app.config['SESSION_ID_MAX_LEN']:
+        abort(400, description='session_id demasiado largo.')
+
+    prompt = (data.get('prompt') or '').strip()
+    model_name = data.get('model') or app.config['DEFAULT_MODEL']
+    try:
+        temperature = float(data.get('temperature', 0.7))
+    except Exception:
+        temperature = 0.7
+    try:
+        max_tokens = int(data.get('max_tokens', 2048))
+    except Exception:
+        max_tokens = 2048
+
     if model_name not in app.config['SUPPORTED_MODELS']:
         abort(400, description=f'Modelo "{model_name}" no soportado.')
-    
+
     if not prompt:
         abort(400, description='El campo "prompt" es requerido.')
 
-    # Validación y Sanitización
-    sanitized_prompt = re.sub(r'[^\w\s\.\,\!\?\-\$\$\$\$\{\}\:\;\'\"\_]', '', prompt).strip()
+    # Saneamiento: permitir caracteres normales y signos de puntuación básicos
+    sanitized_prompt = re.sub(r'[^\w\s\.\,\!\?\-\$\{\}\:\;\'\"\_@#%&\(\)]', '', prompt).strip()
     if len(sanitized_prompt) > app.config['MAX_MESSAGE_LENGTH']:
         abort(400, description='Mensaje demasiado largo.')
 
-    # Preparación de Historial
-    save_session(session_id, user_id) 
+    # Guardar sesión y recuperar historial
+    save_session(session_id, user_id)
     history = get_messages(session_id)
-    
-    # Validar longitud total
+
     total_length = sum(len(msg['content']) for msg in history) + len(sanitized_prompt)
     if total_length > app.config['MAX_HISTORY_LENGTH']:
-        # 💡 En producción, se debería truncar el historial antiguo aquí
         abort(400, description=f'Historial demasiado largo (máx. {app.config["MAX_HISTORY_LENGTH"]} caracteres).')
 
-    # Guardar mensaje de usuario ANTES de la llamada a la API (asíncrono)
+    # Guardar mensaje del usuario (asíncrono) antes del stream
     save_message_async(session_id, 'user', sanitized_prompt)
-    
-    # Construir lista final para la API
+
+    # Construir payload para la API
     messages = history + [{'role': 'user', 'content': sanitized_prompt}]
-    
-    # Llamar a la API con streaming (Server-Sent Events)
-    response_generator = stream_query_model(messages, model_name, temperature, max_tokens)
-    
-    # 💡 Usar stream_with_context para que el generador tenga acceso a 'app.app_context'
+
+    response_generator = stream_query_model(messages, model_name, temperature, max_tokens, timeout=app.config['OPENROUTER_TIMEOUT'])
+
     @stream_with_context
     def generate_stream():
         full_response = ""
         for chunk in response_generator:
+            # chunk viene en formato SSE "data: {...}\n\n"
             if chunk.startswith("data: "):
                 try:
-                    # Desempaquetar el JSON del chunk para revisar el contenido de texto
-                    data = json.loads(chunk[6:].strip())
-                    text_content = data.get('text', '')
-                    error_content = data.get('error', '')
-                    
-                    if text_content:
-                        full_response += text_content
-                    
-                    # Si hay error, detenemos el stream y no guardamos
-                    if error_content:
-                        logger.error(f"Stream terminó con error: {error_content}")
-                        yield chunk # Rendir el error al cliente
-                        return
-                    
-                except json.JSONDecodeError:
-                    pass # Ignorar líneas que no son JSON válido
-            
-            yield chunk # Rendir el chunk raw (formato SSE)
-            
-        # 💡 Guardar respuesta completa DESPUÉS de que el stream termine (asíncrono)
+                    data_json = json.loads(chunk[6:].strip())
+                except Exception:
+                    data_json = {}
+                text_content = data_json.get('text') or ''
+                error_content = data_json.get('error') or ''
+                if text_content:
+                    full_response += text_content
+                if error_content:
+                    logger.error(f"Stream terminó con error: {error_content}")
+                    yield chunk
+                    return
+            yield chunk
+
+        # Guardar respuesta completa (si existe)
         if full_response:
             save_message_async(session_id, 'assistant', full_response)
-        
-        # Enviar el mensaje final para que el cliente sepa que terminó
+
+        # Señal de fin
         yield f"data: {json.dumps({'session_id': session_id, 'end_stream': True})}\n\n"
 
-    # Retornar respuesta en formato SSE
     return Response(generate_stream(), mimetype='text/event-stream')
 
-
-# --- Ruta de Imagen/Multimodal (síncrona) ---
-@api_bp.route('/vision', methods=['POST']) # 💡 Renombrado a 'vision'
+@api_bp.route('/vision', methods=['POST'])
 @login_required
 @rate_limited
 def api_vision():
-    # Código síncrono para manejar multimodalidad, usando query_model_no_stream si fuera necesario
-    # o una implementación directa si la latencia es aceptable
-    abort(501, description="Endpoint multimodal no implementado completamente en esta versión.")
-
-# ... (Otras rutas de historial y modelos, usar `abort` en lugar de `handle_error`)
+    # Endpoint multimodal por ahora no implementado
+    abort(501, description="Endpoint multimodal no implementado en esta versión.")
 
 # Registrar blueprint
-app.register_blueprint(api_bp, url_prefix='/api')
+app.register_blueprint(api_bp)
 
-# --- Servidor de Producción ---
+# --- Factory / Servir ---
 def create_app():
-    logger.info("Aplicación TecSoft AI V3.0 (PROD-READY) inicializada.")
+    logger.info("Aplicación TecSoft AI V3.0 inicializada.")
     return app
 
 if __name__ == '__main__':
-    # 💡 Usar Waitress, un servidor WSGI de producción ligero y robusto
     app = create_app()
     port = int(os.getenv("PORT", 5000))
-    logger.info(f"Iniciando servidor Waitress en el puerto {port}...")
-    # 🔒 Añadir HSTS (Strict-Transport-Security) en un entorno de producción con HTTPS
-    # Aquí se simula, el despliegue real requeriría un proxy (Nginx) para gestionar HTTPS y HSTS.
-    
-    # Para el desarrollo local, aún podemos usar app.run
+    logger.info(f"Iniciando aplicación en puerto {port}...")
     if os.getenv("FLASK_ENV") == "development":
         app.run(debug=True, host='0.0.0.0', port=port)
     else:
-        # Usar Waitress para simular entorno de producción
+        # Waitress en producción
         serve(app, host='0.0.0.0', port=port)
