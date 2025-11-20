@@ -272,423 +272,507 @@ HTML_TEMPLATE_MEJORADO = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TecSoft AI | Asistente de Proyecto</title>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@400;600&display=swap" rel="stylesheet">
-    <style>
-        /* Estilos Mejorados (Variables CSS y diseño futurista/cyberpunk) */
-        :root {
-            --primary-color: #00ff7f; /* Neón verde */
-            --secondary-color: #ff33cc; /* Neón magenta */
-            --bg-color: #00000a; /* Fondo oscuro casi negro */
-            --text-color: #e6e6e6;
-            --code-bg: #1a1a33;
-            --shadow-glow: 0 0 10px rgba(0, 255, 127, 0.6);
-            --error-color: #ff4444;
-        }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TecSoft AI - Mejorado</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        /* BASE Y FONDO */
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            /* Degradado de fondo con centro más claro */
+            background: radial-gradient(circle at center, #0a0a1a, #000010 80%);
+            color: #ffffff;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            animation: fadeIn 1.5s ease-out;
+        }
 
-        body {
-            font-family: 'Rajdhani', sans-serif;
-            background: var(--bg-color);
-            color: var(--text-color);
-            margin: 0;
-            padding: 0;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            animation: backgroundFade 5s ease-in-out;
-        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
 
-        @keyframes backgroundFade { from { opacity: 0; } to { opacity: 1; } }
+        /* TÍTULO Y GLOW */
+        h1 {
+            margin-top: 40px;
+            text-align: center;
+            font-size: 3.5em; /* Aumento de tamaño */
+            color: #00ffff;
+            text-shadow: 0 0 40px #00ffff, 0 0 80px #ff00ff; /* Más intensidad */
+            animation: glow 3s infinite alternate;
+            letter-spacing: 3px; /* Más espaciado */
+            font-family: 'Orbitron', sans-serif; /* Título en fuente más impactante */
+        }
 
-        h1 {
-            margin-top: 40px;
-            font-family: 'Orbitron', sans-serif;
-            color: var(--primary-color);
-            text-shadow: var(--shadow-glow), 0 0 20px var(--secondary-color);
-            animation: neonGlow 1.5s infinite alternate;
-        }
+        @keyframes glow {
+            from { text-shadow: 0 0 15px #00ffff, 0 0 30px #ff00ff; }
+            to { text-shadow: 0 0 50px #00ffff, 0 0 100px #ff00ff; }
+        }
 
-        @keyframes neonGlow {
-            to { text-shadow: 0 0 20px var(--primary-color), 0 0 40px var(--secondary-color); }
-        }
+        /* SECCIONES (Contenedores) */
+        .section {
+            width: 90%;
+            max-width: 800px; /* Un poco más ancho */
+            background: rgba(0, 0, 30, 0.95); /* Fondo más oscuro */
+            border: 3px solid #00ffff; /* Borde más grueso */
+            border-radius: 20px; /* Bordes más redondeados */
+            padding: 30px;
+            margin: 25px 0;
+            box-shadow: 0 0 50px rgba(0, 255, 255, 0.5);
+            backdrop-filter: blur(8px); /* Más blur */
+            transition: transform 0.4s ease, box-shadow 0.4s ease;
+        }
 
-        .section {
-            width: 90%;
-            max-width: 800px;
-            background: rgba(10, 10, 30, 0.95);
-            border: 1px solid var(--primary-color);
-            border-radius: 12px;
-            padding: 25px;
-            margin: 20px 0;
-            box-shadow: 0 0 15px rgba(0, 255, 127, 0.3);
-        }
+        .section:hover {
+            transform: scale(1.01); /* Menor escala al hacer hover para menos distracción */
+            box-shadow: 0 0 80px rgba(255, 0, 255, 0.8), 0 0 10px rgba(0, 255, 255, 0.8);
+        }
 
-        h2 { color: var(--secondary-color); text-shadow: 0 0 5px var(--secondary-color); border-bottom: 1px dashed var(--secondary-color); padding-bottom: 5px; }
+        h2 {
+            color: #ff00ff;
+            text-shadow: 0 0 15px #ff00ff;
+            margin-bottom: 20px;
+            font-size: 1.8em; /* Un poco más grande */
+            border-bottom: 2px dashed rgba(255, 0, 255, 0.3);
+            padding-bottom: 10px;
+        }
 
-        textarea, input[type="url"], input[type="text"] {
-            width: 100%;
-            padding: 12px;
-            margin: 8px 0;
-            border: 1px solid var(--primary-color);
-            border-radius: 8px;
-            background: var(--code-bg);
-            color: var(--text-color);
-            box-shadow: inset 0 0 5px rgba(0, 255, 127, 0.3);
-        }
+        /* INPUTS Y TEXTAREAS */
+        textarea, input {
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            border: 2px solid #00ffff;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.05); /* Fondo más sutil */
+            color: #fff;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 1.2em;
+            outline: none;
+            transition: border-color 0.3s, box-shadow 0.3s;
+            box-sizing: border-box; /* Asegura que padding no afecte el ancho total */
+        }
 
-        textarea:focus, input:focus { border-color: var(--secondary-color); box-shadow: 0 0 10px var(--secondary-color); }
+        textarea:focus, input:focus {
+            border-color: #ff00ff;
+            box-shadow: 0 0 20px #ff00ff;
+            background: rgba(255,255,255,0.1);
+        }
+        
+        /* CONTENEDOR DE INPUT+BOTÓN */
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        /* BOTÓN */
+        button {
+            padding: 15px 30px;
+            background: linear-gradient(45deg, #00ffff, #ff00ff);
+            color: #111; /* Color más oscuro para mejor contraste */
+            border: 0;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.2em;
+            transition: 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
 
-        button {
-            padding: 10px 20px;
-            background: var(--primary-color);
-            color: #000;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 700;
-            transition: 0.3s;
-            margin-right: 10px;
-        }
+        button:hover:not(:disabled) {
+            background: linear-gradient(45deg, #ff00ff, #00ffff);
+            box-shadow: 0 0 30px #ff00ff, 0 0 15px #00ffff;
+            transform: scale(1.05);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #444;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        /* CHAT Y MENSAJES */
+        .chat-container {
+            margin-top: 20px;
+            height: 400px; /* Altura fija para el contenedor de chat */
+            overflow-y: auto;
+            background: rgba(0, 255, 255, 0.08); /* Fondo más claro para visibilidad */
+            border-radius: 15px;
+            border: 1px solid #00ffff;
+            padding: 20px;
+            box-shadow: inset 0 0 15px rgba(0,255,255,0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        /* Estilo de la barra de desplazamiento */
+        .chat-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .chat-container::-webkit-scrollbar-thumb {
+            background: linear-gradient(to bottom, #00ffff, #ff00ff);
+            border-radius: 10px;
+        }
+        .chat-container::-webkit-scrollbar-track {
+            background: #0a0a1a;
+        }
 
-        button:hover { background: var(--secondary-color); box-shadow: 0 0 15px var(--secondary-color); transform: translateY(-2px); }
-        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .message {
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 15px;
+            white-space: pre-wrap;
+            font-size: 1.1em;
+            max-width: 90%;
+            line-height: 1.5;
+            transition: opacity 0.5s ease-in-out;
+        }
 
-        .chat-container {
-            max-height: 450px;
-            overflow-y: auto;
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 8px;
-            border: 1px dashed var(--primary-color);
-            padding: 15px;
-            margin-bottom: 20px;
-        }
+        .user-message {
+            background: rgba(0, 255, 255, 0.15);
+            align-self: flex-end; /* Alineado a la derecha */
+            text-align: left; /* Contenido del texto alineado a la izquierda para mejor lectura */
+            color: #00ffff;
+            border-right: 4px solid #00ffff;
+            border-bottom-right-radius: 0;
+        }
 
-        .message {
-            margin-bottom: 15px;
-            padding: 10px;
-            border-radius: 8px;
-            white-space: pre-wrap;
-            font-size: 1.05em;
-            overflow-wrap: break-word;
-        }
+        .assistant-message {
+            background: rgba(255, 0, 255, 0.15);
+            align-self: flex-start; /* Alineado a la izquierda */
+            text-align: left;
+            color: #ff00ff;
+            border-left: 4px solid #ff00ff;
+            border-bottom-left-radius: 0;
+        }
+        
+        /* Estilos de código y markdown dentro del chat (¡Mejora clave!) */
+        .assistant-message pre {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-top: 10px;
+        }
+        .assistant-message code {
+            font-family: 'Consolas', 'Courier New', monospace;
+            color: #00ffaa; /* Color de código */
+            font-size: 0.95em;
+        }
 
-        .user-message {
-            background: rgba(0, 255, 127, 0.1);
-            text-align: right;
-            color: var(--primary-color);
-            border-left: 3px solid var(--primary-color);
-        }
+        .loading {
+            color: #00ffaa; /* Nuevo color para loading */
+            font-style: italic;
+            text-shadow: 0 0 10px #00ffaa;
+            animation: pulse 1.5s infinite alternate;
+        }
 
-        .assistant-message {
-            background: rgba(255, 51, 204, 0.1);
-            color: var(--secondary-color);
-            border-right: 3px solid var(--secondary-color);
-        }
+        @keyframes pulse {
+            from { opacity: 0.7; }
+            to { opacity: 1; }
+        }
 
-        .assistant-message p, .assistant-message ul, .assistant-message ol, .assistant-message pre {
-            margin: 0 0 10px 0;
-        }
+        .error {
+            color: #ff4444;
+            text-shadow: 0 0 10px #ff4444;
+            font-weight: bold;
+        }
 
-        /* Estilos para el markdown renderizado */
-        .assistant-message pre {
-            background: var(--code-bg);
-            padding: 10px;
-            border-radius: 5px;
-            overflow-x: auto;
-            border: 1px dashed var(--primary-color);
-            color: #ffffff;
-        }
-        .assistant-message code {
-            background: rgba(255, 51, 204, 0.2);
-            padding: 2px 4px;
-            border-radius: 3px;
-        }
+        /* IMAGEN MULTIMODAL */
+        .image-preview {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            margin-top: 15px;
+            border: 2px solid #00ffff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+        }
+        
+        /* FOOTER */
+        footer {
+            margin: 50px 0 20px 0; /* Más margen abajo */
+            color: #aaa;
+            font-size: 1em;
+            text-align: center;
+            padding: 10px;
+            border-top: 1px dashed rgba(255, 255, 255, 0.1);
+        }
 
-        .loading { color: var(--primary-color); font-style: italic; }
-        .error { color: var(--error-color); font-weight: bold; }
-        .success { color: var(--primary-color); }
-        
-        .multimodal-preview {
-            max-width: 100%;
-            height: auto;
-            border: 2px solid var(--secondary-color);
-            border-radius: 5px;
-            margin-top: 10px;
-        }
+        /* MEDIA QUERIES (Responsivo) */
+        @media (max-width: 768px) {
+            h1 { font-size: 2.8em; margin-top: 30px; }
+            .section { padding: 20px; margin: 15px 0; }
+            .chat-container { height: 300px; }
+            button { font-size: 1.1em; padding: 12px 20px; }
+        }
 
-        footer { margin-top: 50px; margin-bottom: 20px; color: #555; font-size: 0.9em; text-align: center; }
+        @media (max-width: 480px) {
+            h1 { font-size: 2em; letter-spacing: 1px; }
+            .section { border-radius: 15px; padding: 15px; }
+            .user-message, .assistant-message { max-width: 100%; }
+        }
 
-        /* Pequeña animación de fondo (simplificada sin canvas) */
-        .background-line {
-            position: absolute;
-            height: 100vh;
-            width: 1px;
-            background: linear-gradient(to bottom, var(--primary-color), var(--secondary-color));
-            opacity: 0.1;
-            z-index: -1;
-            animation: scanLine 10s linear infinite;
-        }
-
-        .line-1 { left: 10%; animation-delay: 0s; }
-        .line-2 { left: 30%; animation-delay: 3s; }
-        .line-3 { left: 70%; animation-delay: 6s; }
-        
-        @keyframes scanLine {
-            0% { opacity: 0.1; transform: scaleY(0.1); }
-            50% { opacity: 0.4; transform: scaleY(1); }
-            100% { opacity: 0.1; transform: scaleY(0.1); }
-        }
-
-    </style>
+        /* PARTÍCULAS */
+        canvas#particles {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            background: transparent;
+        }
+    </style>
 </head>
 <body>
-    <div class="background-line line-1"></div>
-    <div class="background-line line-2"></div>
-    <div class="background-line line-3"></div>
+    <canvas id="particles"></canvas>
 
-    <h1>🚀 TecSoft AI</h1>
-    
-    <div class="section">
-        <h2>🧠 Chat de Texto (Persistente)</h2>
-        <div class="chat-container" id="textChat" aria-live="polite"></div>
-        <textarea id="textInput" rows="4" placeholder="Escribe tu pregunta tecnológica o de código aquí..." aria-label="Mensaje de texto"></textarea>
-        <div style="display: flex; justify-content: flex-start; margin-top: 10px;">
-            <button id="textButton" onclick="sendText()" aria-label="Enviar mensaje de texto">Enviar [↵]</button>
-            <button id="resetButton" onclick="resetChat()" aria-label="Reiniciar chat">Reiniciar Chat</button>
-        </div>
-    </div>
+    <audio autoplay loop volume="0.2">
+        <source src="https://cdn.pixabay.com/download/audio/2022/03/15/audio_72a1cdb55e.mp3?filename=lofi-study-112191.mp3" type="audio/mpeg">
+        Tu navegador no soporta audio.
+    </audio>
 
-    <div class="section">
-        <h2>🖼️ Análisis Multimodal (Imagen + Texto)</h2>
-        <input type="url" id="imageUrl" placeholder="URL de la imagen (ej: https://...)" aria-label="URL de imagen">
-        <textarea id="imageText" rows="3" placeholder="¿Qué deseas saber o analizar sobre esta imagen? (No tiene historial)" aria-label="Pregunta sobre imagen"></textarea>
-        <button id="imageButton" onclick="sendImage()" aria-label="Enviar con imagen">Analizar Imagen</button>
-        <div id="imageResponse" class="message assistant-message" style="margin-top: 20px;"></div>
-    </div>
+    <h1>🚀 TecSoft AI</h1>
 
-    <footer>
-        ✨ Desarrollado por <b>TecSoft AI</b> para Proyecto Universitario |
-        ⚙️ Motorizado por Flask, OpenRouter (kwaipilot/kat-coder-pro:free & x-ai/grok-4.1-fast) |
-        🔒 Sesiones: <span id="sessionStatus">Inactiva</span>
-    </footer>
+    <div class="section">
+        <h2>🧠 Chat de Texto - Conversación</h2>
+        <div class="chat-container" id="textChat"></div>
+        <div class="input-group">
+            <textarea id="textInput" rows="4" placeholder="Escribe tu mensaje aquí..."></textarea>
+            <button id="textButton" onclick="sendText()">Enviar Mensaje</button>
+        </div>
+    </div>
 
-    <script>
-        // --- Lógica de la interfaz mejorada ---
+    <div class="section">
+        <h2>🖼️ Imagen + Texto - Multimodal</h2>
+        <div class="input-group">
+            <input type="url" id="imageUrl" placeholder="URL de la imagen (ej: https://ejemplo.com/foto.jpg)" oninput="updateImagePreview()">
+            <img id="imagePreview" class="image-preview" src="" style="display: none;" alt="Previsualización de imagen">
+            <textarea id="imageText" rows="4" placeholder="¿Qué deseas saber o hacer con la imagen? (ej: Descríbela)"></textarea>
+            <button id="imageButton" onclick="sendImage()">Analizar Imagen</button>
+        </div>
+        <div class="chat-container" id="imageChatResponse">
+             <div id="imageResponse" class="message assistant-message">Esperando análisis...</div>
+        </div>
+    </div>
 
-        const textInput = document.getElementById('textInput');
-        const textChat = document.getElementById('textChat');
-        const textButton = document.getElementById('textButton');
-        const imageButton = document.getElementById('imageButton');
+    <footer>✨ Desarrollado por <b>TecSoft AI</b> | Con tecnología futurista ⚙️</footer>
 
-        // Escuchar Enter para enviar mensaje
-        textInput.addEventListener('keydown', function(event) {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                sendText();
-            }
-        });
-        
-        function updateSessionStatus(active) {
-            const statusElement = document.getElementById('sessionStatus');
-            statusElement.textContent = active ? 'Activa' : 'Inactiva';
-            statusElement.style.color = active ? 'var(--primary-color)' : 'var(--error-color)';
-        }
-        updateSessionStatus(true); // Asumimos que la sesión está activa al cargar
+    <script>
+        // --- Mejoras en JavaScript ---
 
-        /**
-         * Agrega un mensaje al contenedor de chat.
-         * @param {string} role 'user' o 'assistant'
-         * @param {string} content El contenido del mensaje (se renderiza Markdown si es asistente).
-         * @param {HTMLElement | null} targetElement El elemento a reemplazar o null si se añade uno nuevo.
-         */
-        function addMessage(role, content, targetElement = null) {
-            const chatContainer = document.getElementById('textChat');
-            let messageDiv;
+        // Partículas suaves (manteniendo el código original, ya es bueno)
+        const canvas = document.getElementById('particles');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
 
-            if (targetElement && chatContainer.contains(targetElement)) {
-                messageDiv = targetElement;
-                messageDiv.className = role === 'user' ? 'message user-message' : 'message assistant-message';
-            } else {
-                messageDiv = document.createElement('div');
-                messageDiv.className = role === 'user' ? 'message user-message' : 'message assistant-message';
-                chatContainer.appendChild(messageDiv);
-            }
-            
-            // Usar DOMPurify o similar en producción, pero aquí renderizaremos el markdown
-            if (role === 'assistant') {
-                // Renderizado de Markdown (Simplificado para el ejemplo)
-                messageDiv.innerHTML = renderMarkdown(content);
-            } else {
-                messageDiv.textContent = content;
-            }
-            
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-            return messageDiv; // Retorna el elemento para posible uso posterior
-        }
-        
-        function renderMarkdown(markdownText) {
-            // Implementación de renderizado de Markdown (muy simple)
-            // Para un proyecto universitario robusto, se recomienda usar una librería JS como 'marked.js'
-            let html = markdownText
-                .replace(/```([\s\S]*?)```/g, (match, code) => `<pre><code>${code.trim()}</code></pre>`)
-                .replace(/`([^`]+)`/g, '<code>$1</code>')
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/^(#+)\s*(.*)$/gm, (match, hashes, content) => {
-                    const level = hashes.length > 6 ? 6 : hashes.length;
-                    return `<h${level}>${content}</h${level}>`;
-                })
-                .replace(/^- (.*)$/gm, '<li>$1</li>') // Lista simple
-                ;
-            
-            // Envolver el texto restante en párrafos (mejorar el manejo de párrafos)
-            html = html.split('\n\n').map(p => {
-                if (p.startsWith('<h') || p.startsWith('<pre') || p.startsWith('<li')) return p;
-                return `<p>${p.replace(/\n/g, '<br>')}</p>`;
-            }).join('');
-            return html;
-        }
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
 
-        // Función de tipeo simulado
-        function typeResponse(element, fullText) {
-            let i = 0;
-            const speed = 20; // Velocidad en milisegundos (ajustable)
-            element.innerHTML = ''; // Limpiar el contenido antes de empezar
+        for (let i = 0; i < 50; i++) {
+            particles.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2 + 1,
+                speedX: (Math.random() - 0.5) * 0.5,
+                speedY: (Math.random() - 0.5) * 0.5
+            });
+        }
 
-            function type() {
-                if (i < fullText.length) {
-                    element.textContent += fullText.charAt(i);
-                    textChat.scrollTop = textChat.scrollHeight; // Scroll automático
-                    i++;
-                    setTimeout(type, speed);
-                } else {
-                    // Al terminar, renderizar el markdown completo
-                    element.innerHTML = renderMarkdown(fullText);
-                    textButton.disabled = false;
-                    imageButton.disabled = false; // Desbloquear otros botones si es necesario
-                }
-            }
-            
-            type();
-        }
+        function drawParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Color de partícula más futurista (cambio de rgba(0,255,255,0.6) a color sólido con glow)
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 10;
+            ctx.fillStyle = '#00ffff'; 
+            
+            particles.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                p.x += p.speedX;
+                p.y += p.speedY;
+                // Rebote en bordes
+                if (p.x < 0 || p.x > canvas.width) p.speedX *= -1;
+                if (p.y < 0 || p.y > canvas.height) p.speedY *= -1;
+            });
+            requestAnimationFrame(drawParticles);
+        }
+        drawParticles();
 
+        // Historial de chat para texto
+        let chatHistory = [];
+        
+        // Función para renderizar el contenido con soporte básico de Markdown (código)
+        function renderMarkdown(text) {
+             // Reemplaza bloques de código ```...``` con <pre><code>...</code></pre>
+            let html = text.replace(/```([\s\S]*?)```/g, (match, code) => `<pre><code>${code.trim()}</code></pre>`);
+             // Reemplaza saltos de línea con <br> fuera de bloques de código (para pre-wrap más limpio)
+            html = html.replace(/(?![^<]*>)\n/g, '<br>');
+            return html;
+        }
 
-        // Cargar Historial (Asumimos que el historial lo maneja la sesión de Flask,
-        // pero para demostrar la persistencia, se hace una llamada inicial)
-        async function loadInitialHistory() {
-            // En un caso real con Flask Sessions, esto requeriría una ruta /api/history
-            // Por simplicidad, aquí cargamos un mensaje de bienvenida.
-            addMessage('assistant', "Hola! Soy **TecSoft AI**, tu asistente para proyectos de universidad. ¿En qué puedo ayudarte hoy?", false);
-        }
-        loadInitialHistory();
+        function addMessage(role, content) {
+            // Solo añadir al historial si es un mensaje de chat de texto
+            if (role !== 'loading' && role !== 'error') {
+                chatHistory.push({ role, content });
+            }
+            
+            const chatContainer = document.getElementById('textChat');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = role === 'user' ? 'message user-message' : 'message assistant-message';
+            
+            // Usamos innerHTML con el renderer para que soporte código
+            messageDiv.innerHTML = renderMarkdown(content);
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        // --- Chat de Texto (sendText) ---
+        async function sendText() {
+            const textInput = document.getElementById('textInput');
+            const text = textInput.value.trim();
+            const button = document.getElementById('textButton');
+            
+            if (!text) {
+                textInput.focus();
+                return; 
+            }
+            
+            button.disabled = true;
+            textInput.value = '';
 
+            addMessage('user', text);
 
-        async function sendText() {
-            const text = textInput.value.trim();
-            if (!text) return alert("Escribe un mensaje para TecSoft AI");
+            // Agregar mensaje de loading
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message assistant-message loading';
+            loadingDiv.textContent = '⏳ Procesando...';
+            document.getElementById('textChat').appendChild(loadingDiv);
+            document.getElementById('textChat').scrollTop = document.getElementById('textChat').scrollHeight;
 
-            textButton.disabled = true;
-            imageButton.disabled = true;
-            textInput.value = '';
+            try {
+                const res = await fetch('/api/text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ messages: chatHistory.slice(-10) }) // Limitar historial a 10 mensajes
+                });
+                
+                // Remover loading
+                const chatContainer = document.getElementById('textChat');
+                if (chatContainer.contains(loadingDiv)) chatContainer.removeChild(loadingDiv);
+                
+                let data;
+                if (res.ok) {
+                    data = await res.json();
+                    addMessage('assistant', data.reply);
+                } else {
+                    try {
+                        data = await res.json();
+                        addMessage('assistant', `❌ Error (${res.status}): ${data.error || 'Error desconocido'}`);
+                    } catch (e) {
+                        addMessage('assistant', `❌ Error en la respuesta del servidor (${res.status}).`);
+                    }
+                }
+            } catch (e) {
+                // Remover loading en caso de error de red
+                const chatContainer = document.getElementById('textChat');
+                if (chatContainer.contains(loadingDiv)) chatContainer.removeChild(loadingDiv);
+                addMessage('assistant', `⚠️ Error de red: ${e.message}`);
+            } finally {
+                button.disabled = false;
+                textInput.focus();
+            }
+        }
+        
+        // Permite enviar al presionar Enter en el textarea
+        document.getElementById('textInput').addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendText();
+            }
+        });
 
-            // 1. Mostrar mensaje de usuario
-            addMessage('user', text);
+        // --- Chat Multimodal (sendImage) ---
+        
+        // Función para previsualizar la imagen
+        function updateImagePreview() {
+            const imageUrl = document.getElementById('imageUrl').value.trim();
+            const imgElement = document.getElementById('imagePreview');
+            
+            if (imageUrl) {
+                imgElement.src = imageUrl;
+                imgElement.style.display = 'block';
+                // Opcional: Manejar error de carga de imagen
+                imgElement.onerror = () => { imgElement.style.display = 'none'; };
+            } else {
+                imgElement.style.display = 'none';
+                imgElement.src = '';
+            }
+        }
 
-            // 2. Agregar elemento de loading
-            const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'message assistant-message loading';
-            loadingDiv.textContent = '⏳ Procesando en el servidor...';
-            textChat.appendChild(loadingDiv);
-            textChat.scrollTop = textChat.scrollHeight;
-
-            try {
-                // La URL se modificó para usar el historial de sesión de Flask
-                const res = await fetch('/api/text', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    // Solo se envía el nuevo mensaje, el historial lo maneja la sesión
-                    body: JSON.stringify({ message: text }) 
-                });
-                
-                const data = await res.json();
-                textChat.removeChild(loadingDiv); // Eliminar loading
-
-                if (res.ok) {
-                    const responseElement = addMessage('assistant', data.reply);
-                    // Efecto de tipeo solo para la respuesta exitosa
-                    typeResponse(responseElement, data.reply);
-                } else {
-                    // Mostrar error de servidor o rate limit
-                    const errorMsg = '❌ Error del servidor: ' + (data.error || 'Desconocido');
-                    addMessage('assistant', errorMsg);
-                    textButton.disabled = false;
-                    imageButton.disabled = false;
-                }
-
-            } catch (e) {
-                console.error('Error de red:', e);
-                const chatContainer = document.getElementById('textChat');
-                if (chatContainer.contains(loadingDiv)) chatContainer.removeChild(loadingDiv);
-                addMessage('assistant', '⚠️ Error de conexión. Intenta de nuevo.');
-                textButton.disabled = false;
-                imageButton.disabled = false;
-            }
-        }
-
-        async function resetChat() {
-            try {
-                const res = await fetch('/api/reset', { method: 'POST' });
-                if (res.ok) {
-                    textChat.innerHTML = '';
-                    loadInitialHistory();
-                    alert("Chat reseteado. El historial de sesión ha sido limpiado.");
-                } else {
-                    const data = await res.json();
-                    alert("Error al resetear el chat: " + (data.error || 'Desconocido'));
-                }
-            } catch (e) {
-                alert("Error de conexión al resetear el chat.");
-            }
-        }
-
-        async function sendImage() {
-            const image = document.getElementById('imageUrl').value.trim();
-            const text = document.getElementById('imageText').value.trim();
-            const output = document.getElementById('imageResponse');
-            
-            if (!image || !text) return output.innerHTML = "<p class='error'>❌ Proporciona texto y una URL de imagen válida.</p>";
-            
-            imageButton.disabled = true;
-            textButton.disabled = true;
-            output.innerHTML = `<img src="${image}" alt="Imagen a analizar" class="multimodal-preview"><p class='loading' style="margin-top:10px;">🖼️ Analizando imagen: ${text}</p>`;
-
-            try {
-                const res = await fetch('/api/image', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, image_url: image })
-                });
-                
-                const data = await res.json();
-                
-                if (res.ok) {
-                    output.innerHTML = `<img src="${image}" alt="Imagen analizada" class="multimodal-preview">` + 
-                                         `<p class='success' style="margin-top:15px;">**Respuesta del Modelo:**</p>` + 
-                                          renderMarkdown(data.reply);
-                } else {
-                    output.innerHTML = `<img src="${image}" alt="Imagen a analizar" class="multimodal-preview" style="opacity:0.5;">` +
-                                         `<p class='error' style="margin-top:15px;">❌ Error al analizar: ${data.error || "Error desconocido"}</p>`;
-                }
-            } catch (e) {
-                output.innerHTML = `<p class='error'>⚠️ Error de conexión/red: ${e.message}</p>`;
-            } finally {
-                imageButton.disabled = false;
-                textButton.disabled = false;
-            }
-        }
-    </script>
+        async function sendImage() {
+            const image = document.getElementById('imageUrl').value.trim();
+            const text = document.getElementById('imageText').value.trim();
+            const outputDiv = document.getElementById('imageResponse');
+            const button = document.getElementById('imageButton');
+            
+            if (!image || !text) {
+                alert("Proporciona una URL de imagen válida y la pregunta a analizar.");
+                return;
+            }
+            
+            button.disabled = true;
+            outputDiv.className = 'message assistant-message loading';
+            outputDiv.textContent = '🖼️ Analizando imagen...';
+            
+            try {
+                const res = await fetch('/api/image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, image_url: image })
+                });
+                
+                let data;
+                outputDiv.className = 'message assistant-message'; // Cambiar clase de vuelta
+                
+                if (res.ok) {
+                    data = await res.json();
+                    outputDiv.innerHTML = renderMarkdown(data.reply);
+                } else {
+                    try {
+                        data = await res.json();
+                        outputDiv.className += ' error';
+                        outputDiv.innerHTML = `❌ Error (${res.status}): ${data.error || "Error desconocido"}`;
+                    } catch (e) {
+                        outputDiv.className += ' error';
+                        outputDiv.innerHTML = "❌ Error al comunicarse con el servidor de IA.";
+                    }
+                }
+            } catch (e) {
+                outputDiv.className = 'message assistant-message error';
+                outputDiv.innerHTML = `⚠️ Error de conexión: ${e.message}`;
+            } finally {
+                button.disabled = false;
+            }
+        }
+    </script>
 </body>
 </html>
 """
