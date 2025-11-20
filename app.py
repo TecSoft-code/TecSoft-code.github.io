@@ -757,6 +757,6 @@ HTML_TEMPLATE_MEJORADO = """
 </html>
 """
 
----
+
 
 Ahora el código es más limpio, robusto y la visualización de las respuestas del modelo (gracias a `markdown.markdown()` en el backend) 
