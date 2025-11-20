@@ -18,14 +18,12 @@ import markdown
 load_dotenv()
 
 # Inicialización de Flask
-app = Flask(__name__, static_folder='static') # Habilitar carpeta 'static' (opcional, pero buena práctica)
+app = Flask(__name__, static_folder='static')
 
-# Configurar clave secreta para sesiones (CRÍTICO para seguridad)
-# Usa un secreto largo y complejo en .env
+# Configurar clave secreta para sesiones
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "SUPER_SECRETO_DEBES_CAMBIAR_EN_PROD_1234567890")
 
-# Habilitar CORS para solicitudes desde el frontend (Configuración más segura)
-# Para un proyecto universitario, 'origins' puede ser '*' o la URL específica del frontend.
+# Habilitar CORS
 CORS(app, supports_credentials=True, origins=["*"])
 
 # Configurar logging avanzado
@@ -33,19 +31,19 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
     handlers=[
-        logging.FileHandler("app.log", mode='a'), # Modo append
+        logging.FileHandler("app.log", mode='a'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Configurar rate limiting para evitar abuso (CRÍTICO)
+# Configurar rate limiting
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
     default_limits=["100 per day", "30 per hour", "15 per minute"],
-    storage_uri="memory://", # Usar memoria para simplicidad, o Redis/Memcached en producción
-    headers_enabled=True # Considerar headers X-Forwarded-For si se usa proxy
+    storage_uri="memory://",
+    headers_enabled=True
 )
 
 # --- 2. CONSTANTES DE LA API Y MODELOS ---
@@ -58,8 +56,8 @@ if not API_KEY:
 BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Modelos configurables
-TEXT_MODEL = "kwaipilot/kat-coder-pro:free"  # Modelo para texto (Mantener el original)
-IMAGE_MODEL = "x-ai/grok-4.1-fast"  # Modelo para imagen + texto (Mantener el original)
+TEXT_MODEL = "x-ai/grok-4.1-fast"
+IMAGE_MODEL = "x-ai/grok-4.1-fast"
 
 # Configuración de sistema para dar contexto y personalidad
 SYSTEM_MESSAGE = (
@@ -74,51 +72,47 @@ SYSTEM_MESSAGE = (
 def query_model(model: str, messages: List[Dict[str, Any]], max_retries: int = 3) -> str:
     """Función robusta para comunicarse con OpenRouter con retries y backoff exponencial."""
     
-    # 1. Agregar el System Message al inicio del historial (si no está)
-    # Esto asegura que el modelo mantenga el contexto y la personalidad.
+    # CRÍTICO: El system message debe ir al inicio, independientemente de lo que envíe el front.
     full_messages = [{"role": "system", "content": SYSTEM_MESSAGE}] + messages
     
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/tu_usuario/tu_repo_proyecto_uni", # BUENA PRÁCTICA DE OPENROUTER
+        "HTTP-Referer": "https://github.com/tu_usuario/tu_repo_proyecto_uni",
         "X-Title": "TecSoft AI - Proyecto Universitario"
     }
     
-    # payload: se ajusta max_tokens y se añade temperature para control creativo
     payload = {
         "model": model,
         "messages": full_messages,
-        "max_tokens": 2048, # Aumentado para respuestas universitarias detalladas
-        "temperature": 0.7,  # Un poco creativo
+        "max_tokens": 2048,
+        "temperature": 0.7,
     }
     
     for attempt in range(max_retries):
         try:
-            response = requests.post(BASE_URL, headers=headers, json=payload, timeout=45) # Aumentado timeout
+            response = requests.post(BASE_URL, headers=headers, json=payload, timeout=45)
             response.raise_for_status()
             result = response.json()
             
-            # Validación de la respuesta de la API
             if "choices" in result and result["choices"] and "message" in result["choices"][0]:
                 content = result["choices"][0]["message"].get("content", "Sin respuesta útil del modelo.")
                 logger.info(f"Respuesta exitosa del modelo {model} en intento {attempt + 1}. Uso: {result.get('usage', {})}")
                 return content
             else:
-                # La API respondió 200, pero la estructura es incorrecta (Error de OpenRouter)
                 error_msg = f"Estructura de respuesta inválida de OpenRouter: {json.dumps(result)}"
                 logger.error(error_msg)
+                # No reintentar con respuesta 200 malformada
                 return "Error interno del modelo: Respuesta malformada."
                 
         except requests.exceptions.Timeout:
             logger.warning(f"Tiempo de espera agotado en intento {attempt + 1}.")
             if attempt == max_retries - 1:
                 return "Error: Tiempo de espera agotado después de varios intentos."
-            time.sleep(2 ** attempt + 1) # Exponential backoff con jitter
+            time.sleep(2 ** attempt + 1)
         except requests.exceptions.RequestException as e:
             logger.error(f"Error en la API en intento {attempt + 1}: {str(e)}. Código: {response.status_code if 'response' in locals() else 'N/A'}")
             if attempt == max_retries - 1:
-                # Intentar parsear el error si es JSON (ej. Rate Limit de OpenRouter)
                 try:
                     error_json = response.json()
                     error_detail = error_json.get('error', {}).get('message', str(e))
@@ -134,18 +128,15 @@ def get_chat_history_from_session() -> List[Dict[str, str]]:
     """Obtiene el historial de chat de la sesión, asegurando un formato válido."""
     history = session.get('chat_history')
     if history is None or not isinstance(history, list):
-        # Inicializar o limpiar historial corrupto
         session['chat_history'] = []
         return []
-    # Validación simple de formato (debe ser [{role: str, content: str}, ...])
     return [msg for msg in history if isinstance(msg, dict) and 'role' in msg and 'content' in msg]
 
 def update_chat_history_in_session(role: str, content: str):
-    """Añade un mensaje al historial de sesión."""
+    """Añade un mensaje al historial de sesión y lo limita."""
     history = get_chat_history_from_session()
     history.append({"role": role, "content": content})
-    # Limitar el historial para evitar payloads gigantes y costos excesivos
-    # Conserva los 10 últimos mensajes (5 pares)
+    # Limitar el historial (ej. conservar los 10 últimos mensajes)
     session['chat_history'] = history[-10:]
     logger.debug(f"Historial actualizado. Total: {len(session['chat_history'])} mensajes.")
 
@@ -157,7 +148,6 @@ def bad_request(error):
 
 @app.errorhandler(429)
 def rate_limit_exceeded(e):
-    # Error específico de Rate Limiter
     logger.warning(f"Rate limit excedido para IP: {get_remote_address()}")
     return jsonify({'error': '❌ Límite de solicitudes excedido. Intenta de nuevo en unos momentos.'}), 429
 
@@ -167,13 +157,12 @@ def not_found(error):
 
 @app.errorhandler(500)
 def internal_error(error):
-    logger.exception("Error 500 capturado.") # Captura la traza completa
+    logger.exception("Error 500 capturado.")
     return jsonify({'error': 'Error interno del servidor. Revisa los logs.'}), 500
 
 @app.route('/')
 def home():
     """Ruta principal que sirve la interfaz web."""
-    # Usar el template mejorado con manejo de estado de sesión
     return render_template_string(HTML_TEMPLATE_MEJORADO)
 
 # --- 5. RUTAS API PARA LA LÓGICA DE NEGOCIO ---
@@ -185,7 +174,7 @@ def api_reset():
     return jsonify({'message': 'Historial de chat reseteado con éxito.'}), 200
 
 @app.route('/api/text', methods=['POST'])
-@limiter.limit("10 per minute") # Límite estricto para chat
+@limiter.limit("10 per minute")
 def api_text():
     """Maneja el chat de solo texto con historial de sesión."""
     try:
@@ -198,20 +187,28 @@ def api_text():
             
         user_message_content = user_message_content.strip()
 
-        # 1. Obtener el historial (sin el system message)
+        # 1. Obtener el historial actual (sin el system message)
         messages = get_chat_history_from_session()
         
-        # 2. Agregar el nuevo mensaje del usuario
+        # 2. Agregar el nuevo mensaje del usuario al historial de sesión
         update_chat_history_in_session("user", user_message_content)
+        
+        # 3. La lista 'messages' que se recuperó en el paso 1 no tiene el mensaje del usuario.
+        # Volvemos a obtener el historial actualizado, o simplemente agregamos el mensaje del usuario
+        # a la lista original que se va a enviar a la API.
+        
+        # En este punto, 'messages' tiene el historial viejo. Si llamamos a get_chat_history_from_session()
+        # de nuevo, obtendremos el historial actualizado que contiene el mensaje del usuario.
+        updated_messages = get_chat_history_from_session() 
+        
+        # 4. Llamar al modelo con el historial COMPLETO
+        reply_content = query_model(TEXT_MODEL, updated_messages)
 
-        # 3. Llamar al modelo
-        reply_content = query_model(TEXT_MODEL, messages + [{"role": "user", "content": user_message_content}])
-
-        # 4. Agregar la respuesta del asistente (solo si no es un error de API)
+        # 5. Agregar la respuesta del asistente (solo si no es un error de API)
         if not (reply_content.startswith("Error:") or reply_content.startswith("Error interno del modelo")):
             update_chat_history_in_session("assistant", reply_content)
 
-        # 5. Respuesta final
+        # 6. Respuesta final
         return jsonify({'reply': reply_content}), 200
 
     except Exception as e:
@@ -220,7 +217,7 @@ def api_text():
 
 
 @app.route('/api/image', methods=['POST'])
-@limiter.limit("5 per hour") # Límite más estricto para análisis de imagen/multimodal (más costoso)
+@limiter.limit("5 per hour")
 def api_image():
     """Maneja el análisis de texto + imagen."""
     try:
@@ -241,7 +238,7 @@ def api_image():
         if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', image_url):
             return jsonify({'error': 'Formato de URL inválido o inseguro.'}), 400
 
-        # La estructura de mensajes para multimodal en OpenRouter debe ser:
+        # La estructura de mensajes para multimodal en OpenRouter
         messages = [
             {
                 "role": "user",
@@ -255,8 +252,7 @@ def api_image():
         # Llamar al modelo multimodal
         reply_content = query_model(IMAGE_MODEL, messages)
 
-        # Respuesta final (el historial de multimodal no se persiste por simplicidad,
-        # pero se podría hacer si el modelo lo permite y es necesario)
+        # Respuesta final
         return jsonify({'reply': reply_content}), 200
 
     except Exception as e:
@@ -264,9 +260,7 @@ def api_image():
         return jsonify({'error': f'Error en el procesamiento de la solicitud: {str(e)}'}), 500
 
 
-# --- 6. TEMPLATE HTML MEJORADO (A LA MEDIDA DEL PROYECTO) ---
-
-# Nota: El HTML_TEMPLATE_MEJORADO reemplaza al original.
+# --- 6. TEMPLATE HTML MEJORADO (Se mantiene el original para completar el código) ---
 
 HTML_TEMPLATE_MEJORADO = """
 <!DOCTYPE html>
@@ -563,7 +557,7 @@ HTML_TEMPLATE_MEJORADO = """
             <button id="imageButton" onclick="sendImage()">Analizar Imagen</button>
         </div>
         <div class="chat-container" id="imageChatResponse">
-             <div id="imageResponse" class="message assistant-message">Esperando análisis...</div>
+              <div id="imageResponse" class="message assistant-message">Esperando análisis...</div>
         </div>
     </div>
 
@@ -615,7 +609,8 @@ HTML_TEMPLATE_MEJORADO = """
         }
         drawParticles();
 
-        // Historial de chat para texto
+        // Historial de chat para texto (redundante, se usa la sesión del servidor, pero lo mantengo
+        // ya que el código original lo usa para añadir al chat)
         let chatHistory = [];
         
         // Función para renderizar el contenido con soporte básico de Markdown (código)
@@ -628,11 +623,7 @@ HTML_TEMPLATE_MEJORADO = """
         }
 
         function addMessage(role, content) {
-            // Solo añadir al historial si es un mensaje de chat de texto
-            if (role !== 'loading' && role !== 'error') {
-                chatHistory.push({ role, content });
-            }
-            
+            // No es necesario añadir al historial JS si el backend lo maneja, solo al DOM.
             const chatContainer = document.getElementById('textChat');
             const messageDiv = document.createElement('div');
             messageDiv.className = role === 'user' ? 'message user-message' : 'message assistant-message';
@@ -668,10 +659,12 @@ HTML_TEMPLATE_MEJORADO = """
             document.getElementById('textChat').scrollTop = document.getElementById('textChat').scrollHeight;
 
             try {
+                // CORRECCIÓN: Ahora solo enviamos el 'message' al backend, 
+                // ya que el backend maneja el historial de sesión de forma centralizada.
                 const res = await fetch('/api/text', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: chatHistory.slice(-10) }) // Limitar historial a 10 mensajes
+                    body: JSON.stringify({ message: text }) // Solo enviamos el mensaje del usuario
                 });
                 
                 // Remover loading
@@ -779,8 +772,6 @@ HTML_TEMPLATE_MEJORADO = """
 
 # Bloque de ejecución principal
 if __name__ == '__main__':
-    # Usar el puerto 5000 o el que esté configurado en la variable de entorno
     port = int(os.getenv("PORT", 5000))
     logger.info(f"Iniciando TecSoft AI en puerto {port}")
-    # Nota: En producción, usar un servidor WSGI como Gunicorn.
     app.run(debug=True, port=port, host='0.0.0.0')
